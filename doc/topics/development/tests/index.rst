@@ -219,7 +219,7 @@ the default cloud provider configuration file for DigitalOcean looks like this:
 .. code-block:: yaml
 
     digitalocean-config:
-      driver: digital_ocean
+      driver: digitalocean
       client_key: ''
       api_key: ''
       location: New York 1
@@ -230,7 +230,7 @@ must be provided:
 .. code-block:: yaml
 
     digitalocean-config:
-      driver: digital_ocean
+      driver: digitalocean
       client_key: wFGEwgregeqw3435gDger
       api_key: GDE43t43REGTrkilg43934t34qT43t4dgegerGEgg
       location: New York 1
@@ -436,7 +436,7 @@ external resource, like a cloud virtual machine. This decorator is not normally
 used by developers outside of the Salt core team.
 
 `@destructiveTest` -- Marks a test as potentially destructive. It will not be run
-by the test runner unles the ``-run-destructive`` test is expressly passed.
+by the test runner unless the ``-run-destructive`` test is expressly passed.
 
 `@requires_network` -- Requires a network connection for the test to operate
 successfully. If a network connection is not detected, the test will not run.

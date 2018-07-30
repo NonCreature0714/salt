@@ -27,9 +27,10 @@ State to synchronize files and directories with rsync.
 
 '''
 
-from __future__ import absolute_import
-import salt.utils
+from __future__ import absolute_import, print_function, unicode_literals
 import os
+
+import salt.utils.path
 
 
 def __virtual__():
@@ -38,7 +39,7 @@ def __virtual__():
 
     :return:
     '''
-    return salt.utils.which('rsync') and 'rsync' or False
+    return salt.utils.path.which('rsync') and 'rsync' or False
 
 
 def _get_summary(rsync_out):
@@ -122,7 +123,7 @@ def synchronized(name, source,
     additional_opts
         Pass additional options to rsync, should be included as a list.
 
-        .. versionadded:: Oxygen
+        .. versionadded:: 2018.3.0
     '''
 
     ret = {'name': name, 'changes': {}, 'result': True, 'comment': ''}

@@ -56,7 +56,7 @@ if %Python%==2 (
     Set "PyVerMajor=2"
     Set "PyVerMinor=7"
 ) else (
-    Set "PyDir=C:\Program Files\Python35"
+    Set "PyDir=C:\Python35"
     Set "PyVerMajor=3"
     Set "PyVerMinor=5"
 )
@@ -67,10 +67,13 @@ If not Exist "%PyDir%\python.exe" (
     exit /b 1
 )
 
-Set "CurrDir=%cd%"
-Set "BinDir=%cd%\buildenv\bin"
-Set "InsDir=%cd%\installer"
-Set "PreDir=%cd%\prereqs"
+Set "CurDir=%~dp0"
+Set "BldDir=%CurDir%\buildenv"
+Set "BinDir=%CurDir%\buildenv\bin"
+Set "CnfDir=%CurDir%\buildenv\conf"
+Set "InsDir=%CurDir%\installer"
+Set "PreDir=%CurDir%\prereqs"
+for /f "delims=" %%a in ('git rev-parse --show-toplevel') do @set "SrcDir=%%a"
 
 :: Find the NSIS Installer
 If Exist "C:\Program Files\NSIS\" (
@@ -101,20 +104,44 @@ If Exist "%BinDir%\" (
 xcopy /E /Q "%PyDir%" "%BinDir%\"
 @echo.
 
-@echo Copying VCRedist to Prerequisites
+:: Copy the default master and minion configs to buildenv\conf
+@echo Copying configs to buildenv\conf...
+@echo ----------------------------------------------------------------------
+@echo xcopy /E /Q "%SrcDir%\conf\master" "%CnfDir%\"
+xcopy /Q /Y "%SrcDir%\conf\master" "%CnfDir%\"
+@echo xcopy /E /Q "%SrcDir%\conf\minion" "%CnfDir%\"
+xcopy /Q /Y "%SrcDir%\conf\minion" "%CnfDir%\"
+@echo.
+
+@echo Copying NSSM to buildenv
 @echo ----------------------------------------------------------------------
 :: Make sure the "prereq" directory exists
 If NOT Exist "%PreDir%" mkdir "%PreDir%"
 
-:: Set the location of the vcredist to download
-If %Python%==3 (
-    Set Url64="http://repo.saltstack.com/windows/dependencies/64/vcredist_x64_2015.exe"
-    Set Url32="http://repo.saltstack.com/windows/dependencies/32/vcredist_x86_2015.exe"
+:: Set the location of the ssm to download
+Set Url64="https://repo.saltstack.com/windows/dependencies/64/ssm-2.24-103-gdee49fc.exe"
+Set Url32="https://repo.saltstack.com/windows/dependencies/32/ssm-2.24-103-gdee49fc.exe"
 
+:: Check for 64 bit by finding the Program Files (x86) directory
+If Defined ProgramFiles(x86) (
+    powershell -ExecutionPolicy RemoteSigned -File download_url_file.ps1 -url "%Url64%" -file "%BinDir%\ssm.exe"
 ) Else (
-    Set Url64="http://repo.saltstack.com/windows/dependencies/64/vcredist_x64_2008_mfc.exe"
-    Set Url32="http://repo.saltstack.com/windows/dependencies/32/vcredist_x86_2008_mfc.exe"
+    powershell -ExecutionPolicy RemoteSigned -File download_url_file.ps1 -url "%Url32%" -file "%BinDir%\ssm.exe"
 )
+@echo.
+
+:: Make sure the "prereq" directory exists
+If NOT Exist "%PreDir%" mkdir "%PreDir%"
+
+:: Don't include the vcredist for Py3 installations
+If %Python%==3 goto :vcredist_end
+
+@echo Copying VCRedist to Prerequisites
+@echo ----------------------------------------------------------------------
+
+:: Set the location of the vcredist to download
+Set Url64="http://repo.saltstack.com/windows/dependencies/64/vcredist_x64_2008_mfc.exe"
+Set Url32="http://repo.saltstack.com/windows/dependencies/32/vcredist_x86_2008_mfc.exe"
 
 :: Check for 64 bit by finding the Program Files (x86) directory
 If Defined ProgramFiles(x86) (
@@ -124,15 +151,17 @@ If Defined ProgramFiles(x86) (
 )
 @echo.
 
+:vcredist_end
+
 :: Remove the fixed path in .exe files
 @echo Removing fixed path from .exe files
 @echo ----------------------------------------------------------------------
-"%PyDir%\python" "%CurrDir%\portable.py" -f "%BinDir%\Scripts\easy_install.exe"
-"%PyDir%\python" "%CurrDir%\portable.py" -f "%BinDir%\Scripts\easy_install-%PyVerMajor%.%PyVerMinor%.exe"
-"%PyDir%\python" "%CurrDir%\portable.py" -f "%BinDir%\Scripts\pip.exe"
-"%PyDir%\python" "%CurrDir%\portable.py" -f "%BinDir%\Scripts\pip%PyVerMajor%.%PyVerMinor%.exe"
-"%PyDir%\python" "%CurrDir%\portable.py" -f "%BinDir%\Scripts\pip%PyVerMajor%.exe"
-"%PyDir%\python" "%CurrDir%\portable.py" -f "%BinDir%\Scripts\wheel.exe"
+"%PyDir%\python" "%CurDir%\portable.py" -f "%BinDir%\Scripts\easy_install.exe"
+"%PyDir%\python" "%CurDir%\portable.py" -f "%BinDir%\Scripts\easy_install-%PyVerMajor%.%PyVerMinor%.exe"
+"%PyDir%\python" "%CurDir%\portable.py" -f "%BinDir%\Scripts\pip.exe"
+"%PyDir%\python" "%CurDir%\portable.py" -f "%BinDir%\Scripts\pip%PyVerMajor%.%PyVerMinor%.exe"
+"%PyDir%\python" "%CurDir%\portable.py" -f "%BinDir%\Scripts\pip%PyVerMajor%.exe"
+"%PyDir%\python" "%CurDir%\portable.py" -f "%BinDir%\Scripts\wheel.exe"
 @echo.
 
 @echo Cleaning up unused files and directories...
@@ -374,8 +403,8 @@ If Exist "%BinDir%\Lib\site-packages\salt\modules\solaris*"^
     del /Q "%BinDir%\Lib\site-packages\salt\modules\solaris*" 1>nul
 If Exist "%BinDir%\Lib\site-packages\salt\modules\solr.py"^
     del /Q "%BinDir%\Lib\site-packages\salt\modules\solr.*" 1>nul
-If Exist "%BinDir%\Lib\site-packages\salt\modules\ssh*"^
-    del /Q "%BinDir%\Lib\site-packages\salt\modules\ssh*" 1>nul
+If Exist "%BinDir%\Lib\site-packages\salt\modules\ssh_*"^
+    del /Q "%BinDir%\Lib\site-packages\salt\modules\ssh_*" 1>nul
 If Exist "%BinDir%\Lib\site-packages\salt\modules\supervisord.py"^
     del /Q "%BinDir%\Lib\site-packages\salt\modules\supervisord.*" 1>nul
 If Exist "%BinDir%\Lib\site-packages\salt\modules\sysbench.py"^
@@ -510,8 +539,8 @@ If Exist "%BinDir%\Lib\site-packages\salt\states\smartos.py"^
     del /Q "%BinDir%\Lib\site-packages\salt\states\smartos.*" 1>nul
 If Exist "%BinDir%\Lib\site-packages\salt\states\snapper.py"^
     del /Q "%BinDir%\Lib\site-packages\salt\states\snapper.*" 1>nul
-If Exist "%BinDir%\Lib\site-packages\salt\states\ssh*"^
-    del /Q "%BinDir%\Lib\site-packages\salt\states\ssh*" 1>nul
+If Exist "%BinDir%\Lib\site-packages\salt\states\ssh_*"^
+    del /Q "%BinDir%\Lib\site-packages\salt\states\ssh_*" 1>nul
 If Exist "%BinDir%\Lib\site-packages\salt\states\supervisord.py"^
     del /Q "%BinDir%\Lib\site-packages\salt\states\supervisord.*" 1>nul
 If Exist "%BinDir%\Lib\site-packages\salt\states\sysrc.py"^
@@ -534,12 +563,6 @@ If Exist "%BinDir%\Lib\site-packages\salt\states\zpool.py"^
 :: Remove Unneeded Components
 If Exist "%BinDir%\Lib\site-packages\salt\cloud"^
     rd /S /Q "%BinDir%\Lib\site-packages\salt\cloud" 1>nul
-If Exist "%BinDir%\Scripts\salt-key*"^
-    del /Q "%BinDir%\Scripts\salt-key*" 1>nul
-If Exist "%BinDir%\Scripts\salt-master*"^
-    del /Q "%BinDir%\Scripts\salt-master*" 1>nul
-If Exist "%BinDir%\Scripts\salt-run*"^
-    del /Q "%BinDir%\Scripts\salt-run*" 1>nul
 If Exist "%BinDir%\Scripts\salt-unity*"^
     del /Q "%BinDir%\Scripts\salt-unity*" 1>nul
 
@@ -547,6 +570,40 @@ If Exist "%BinDir%\Scripts\salt-unity*"^
 
 @echo Building the installer...
 @echo ----------------------------------------------------------------------
+:: Make the Master installer if the nullsoft script exists
+If Exist "%InsDir%\Salt-Setup.nsi"^
+    makensis.exe /DSaltVersion=%Version% /DPythonVersion=%Python% "%InsDir%\Salt-Setup.nsi"
+
+:: Remove files not needed for Salt Minion
+:: salt
+:: salt has to be removed individually (can't wildcard it)
+If Exist "%BinDir%\Scripts\salt"^
+    del /Q "%BinDir%\Scripts\salt" 1>nul
+If Exist "%BinDir%\Scripts\salt.exe"^
+    del /Q "%BinDir%\Scripts\salt.exe" 1>nul
+If Exist "%BldDir%\salt.bat"^
+    del /Q "%BldDir%\salt.bat" 1>nul
+:: salt-key
+If Exist "%BinDir%\Scripts\salt-key*"^
+    del /Q "%BinDir%\Scripts\salt-key*" 1>nul
+If Exist "%BldDir%\salt-key.bat"^
+    del /Q "%BldDir%\salt-key.bat" 1>nul
+:: salt-master
+If Exist "%BinDir%\Scripts\salt-master*"^
+    del /Q "%BinDir%\Scripts\salt-master*" 1>nul
+If Exist "%BldDir%\salt-master.bat"^
+    del /Q "%BldDir%\salt-master.bat" 1>nul
+:: salt-run
+If Exist "%BinDir%\Scripts\salt-run*"^
+    del /Q "%BinDir%\Scripts\salt-run*" 1>nul
+If Exist "%BldDir%\salt-run.bat"^
+    del /Q "%BldDir%\salt-run.bat" 1>nul
+
+:: Remove the master config file
+if Exist "%CnfDir%\master"^
+    del /Q "%CnfDir%\master" 1>nul
+
+:: Make the Salt Minion Installer
 makensis.exe /DSaltVersion=%Version% /DPythonVersion=%Python% "%InsDir%\Salt-Minion-Setup.nsi"
 @echo.
 

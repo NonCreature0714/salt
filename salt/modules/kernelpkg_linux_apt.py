@@ -2,14 +2,17 @@
 '''
 Manage Linux kernel packages on APT-based systems
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
+import functools
 import logging
 import re
 
-# Import 3rd-party libs
 try:
+    # Import Salt libs
+    from salt.ext import six
     from salt.utils.versions import LooseVersion as _LooseVersion
     from salt.ext.six.moves import filter  # pylint: disable=import-error,redefined-builtin
+    from salt.exceptions import CommandExecutionError
     HAS_REQUIRED_LIBS = True
 except ImportError:
     HAS_REQUIRED_LIBS = False
@@ -73,7 +76,11 @@ def list_installed():
         return []
 
     prefix_len = len(_package_prefix()) + 1
-    return sorted([pkg[prefix_len:] for pkg in result], cmp=_cmp_version)
+
+    if six.PY2:
+        return sorted([pkg[prefix_len:] for pkg in result], cmp=_cmp_version)
+    else:
+        return sorted([pkg[prefix_len:] for pkg in result], key=functools.cmp_to_key(_cmp_version))
 
 
 def latest_available():
@@ -107,11 +114,10 @@ def latest_installed():
         salt '*' kernelpkg.latest_installed
 
     .. note::
-
         This function may not return the same value as
-        :py:func:`~salt.modules.kernelpkg.active` if a new kernel
+        :py:func:`~salt.modules.kernelpkg_linux_apt.active` if a new kernel
         has been installed and the system has not yet been rebooted.
-        The :py:func:`~salt.modules.kernelpkg.needs_reboot` function
+        The :py:func:`~salt.modules.kernelpkg_linux_apt.needs_reboot` function
         exists to detect this condition.
     '''
     pkgs = list_installed()
@@ -156,9 +162,9 @@ def upgrade(reboot=False, at_time=None):
         salt '*' kernelpkg.upgrade reboot=True at_time=1
 
     .. note::
-    An immediate reboot often shuts down the system before the minion
-    has a chance to return, resulting in errors. A minimal delay (1 minute)
-    is useful to ensure the result is delivered to the master.
+        An immediate reboot often shuts down the system before the minion has a
+        chance to return, resulting in errors. A minimal delay (1 minute) is
+        useful to ensure the result is delivered to the master.
     '''
     result = __salt__['pkg.install'](
         name='{0}-{1}'.format(_package_prefix(), latest_available()))
@@ -182,7 +188,7 @@ def upgrade(reboot=False, at_time=None):
 def upgrade_available():
     '''
     Detect if a new kernel version is available in the repositories.
-    Returns True if a new kernel is avaliable, False otherwise.
+    Returns True if a new kernel is available, False otherwise.
 
     CLI Example:
 
@@ -191,6 +197,69 @@ def upgrade_available():
         salt '*' kernelpkg.upgrade_available
     '''
     return _LooseVersion(latest_available()) > _LooseVersion(latest_installed())
+
+
+def remove(release):
+    '''
+    Remove a specific version of the kernel.
+
+    release
+        The release number of an installed kernel. This must be the entire release
+        number as returned by :py:func:`~salt.modules.kernelpkg_linux_apt.list_installed`,
+        not the package name.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kernelpkg.remove 4.4.0-70-generic
+    '''
+    if release not in list_installed():
+        raise CommandExecutionError('Kernel release \'{0}\' is not installed'.format(release))
+
+    if release == active():
+        raise CommandExecutionError('Active kernel cannot be removed')
+
+    target = '{0}-{1}'.format(_package_prefix(), release)
+    log.info('Removing kernel package %s', target)
+
+    __salt__['pkg.purge'](target)
+
+    return {'removed': [target]}
+
+
+def cleanup(keep_latest=True):
+    '''
+    Remove all unused kernel packages from the system.
+
+    keep_latest : True
+        In the event that the active kernel is not the latest one installed, setting this to True
+        will retain the latest kernel package, in addition to the active one. If False, all kernel
+        packages other than the active one will be removed.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' kernelpkg.cleanup
+    '''
+    removed = []
+
+    # Loop over all installed kernel packages
+    for kernel in list_installed():
+
+        # Keep the active kernel package
+        if kernel == active():
+            continue
+
+        # Optionally keep the latest kernel package
+        if keep_latest and kernel == latest_installed():
+            continue
+
+        # Remove the kernel package
+        removed.extend(remove(kernel)['removed'])
+
+    return {'removed': removed}
 
 
 def _package_prefix():
@@ -211,11 +280,11 @@ def _cmp_version(item1, item2):
     '''
     Compare function for package version sorting
     '''
-    v1 = _LooseVersion(item1)
-    v2 = _LooseVersion(item2)
+    vers1 = _LooseVersion(item1)
+    vers2 = _LooseVersion(item2)
 
-    if v1 < v2:
+    if vers1 < vers2:
         return -1
-    if v1 > v2:
+    if vers1 > vers2:
         return 1
     return 0

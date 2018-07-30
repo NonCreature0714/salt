@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
-    :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
+    :codeauthor: Pedro Algarvio (pedro@algarvio.me)
 
     =============
     Class Mix-Ins
@@ -30,17 +30,22 @@ from tests.support.runtests import RUNTIME_VARS
 from tests.support.paths import CODE_DIR
 
 # Import salt libs
-#import salt.config
-import salt.utils
+import salt.config
+import salt.utils.event
+import salt.utils.files
+import salt.utils.functools
+import salt.utils.path
+import salt.utils.stringutils
+import salt.utils.yaml
 import salt.version
 import salt.exceptions
+import salt.utils.process
 from salt.utils.verify import verify_env
 from salt.utils.immutabletypes import freeze
 from salt._compat import ElementTree as etree
 
 # Import 3rd-party libs
-import yaml
-import salt.ext.six as six
+from salt.ext import six
 from salt.ext.six.moves import zip  # pylint: disable=import-error,redefined-builtin
 
 log = logging.getLogger(__name__)
@@ -107,12 +112,14 @@ class AdaptedConfigurationTestCaseMixin(object):
                     rdict['sock_dir'],
                     conf_dir
                    ],
-                   RUNTIME_VARS.RUNNING_TESTS_USER)
+                   RUNTIME_VARS.RUNNING_TESTS_USER,
+                   root_dir=rdict['root_dir'],
+                   )
 
         rdict['config_dir'] = conf_dir
         rdict['conf_file'] = os.path.join(conf_dir, config_for)
-        with salt.utils.fopen(rdict['conf_file'], 'w') as wfh:
-            wfh.write(yaml.dump(rdict, default_flow_style=False))
+        with salt.utils.files.fopen(rdict['conf_file'], 'w') as wfh:
+            salt.utils.yaml.safe_dump(rdict, wfh, default_flow_style=False)
         return rdict
 
     @staticmethod
@@ -164,9 +171,13 @@ class AdaptedConfigurationTestCaseMixin(object):
                 )
         return RUNTIME_VARS.RUNTIME_CONFIGS[config_for]
 
-    @staticmethod
-    def get_config_dir():
+    @property
+    def config_dir(self):
         return RUNTIME_VARS.TMP_CONF_DIR
+
+    def get_config_dir(self):
+        log.warning('Use the config_dir attribute instead of calling get_config_dir()')
+        return self.config_dir
 
     @staticmethod
     def get_config_file_path(filename):
@@ -244,9 +255,8 @@ class ShellCaseCommonTestsMixin(CheckShellBinaryNameAndVersionMixin):
     def test_salt_with_git_version(self):
         if getattr(self, '_call_binary_', None) is None:
             self.skipTest('\'_call_binary_\' not defined.')
-        from salt.utils import which
         from salt.version import __version_info__, SaltStackVersion
-        git = which('git')
+        git = salt.utils.path.which('git')
         if not git:
             self.skipTest('The git binary is not available')
 
@@ -272,7 +282,7 @@ class ShellCaseCommonTestsMixin(CheckShellBinaryNameAndVersionMixin):
             self.skipTest(
                 'Failed to get the output of \'git describe\'. '
                 'Error: \'{0}\''.format(
-                    salt.utils.to_str(err)
+                    salt.utils.stringutils.to_str(err)
                 )
             )
 
@@ -441,7 +451,7 @@ class LoaderModuleMockMixin(six.with_metaclass(_FixLoaderModuleMockMixinMroOrder
                     # used to patch above
                     import salt.utils
                     for func in minion_funcs:
-                        minion_funcs[func] = salt.utils.namespaced_function(
+                        minion_funcs[func] = salt.utils.functools.namespaced_function(
                             minion_funcs[func],
                             module_globals,
                             preserve_context=True
@@ -633,6 +643,29 @@ class SaltReturnAssertsMixin(object):
             self.assertNotEqual(saltret, comparison)
 
 
+def _fetch_events(q):
+    '''
+    Collect events and store them
+    '''
+    def _clean_queue():
+        print('Cleaning queue!')
+        while not q.empty():
+            queue_item = q.get()
+            queue_item.task_done()
+
+    atexit.register(_clean_queue)
+    a_config = AdaptedConfigurationTestCaseMixin()
+    event = salt.utils.event.get_event('minion', sock_dir=a_config.get_config('minion')['sock_dir'], opts=a_config.get_config('minion'))
+    while True:
+        try:
+            events = event.get_event(full=False)
+        except Exception:
+            # This is broad but we'll see all kinds of issues right now
+            # if we drop the proc out from under the socket while we're reading
+            pass
+        q.put(events)
+
+
 class SaltMinionEventAssertsMixin(object):
     '''
     Asserts to verify that a given event was seen
@@ -641,35 +674,14 @@ class SaltMinionEventAssertsMixin(object):
     def __new__(cls, *args, **kwargs):
         # We have to cross-call to re-gen a config
         cls.q = multiprocessing.Queue()
-        cls.fetch_proc = multiprocessing.Process(target=cls._fetch, args=(cls.q,))
+        cls.fetch_proc = salt.utils.process.SignalHandlingMultiprocessingProcess(
+            target=_fetch_events, args=(cls.q,)
+        )
         cls.fetch_proc.start()
         return object.__new__(cls)
 
     def __exit__(self, *args, **kwargs):
         self.fetch_proc.join()
-
-    @staticmethod
-    def _fetch(q):
-        '''
-        Collect events and store them
-        '''
-        def _clean_queue():
-            print('Cleaning queue!')
-            while not q.empty():
-                queue_item = q.get()
-                queue_item.task_done()
-
-        atexit.register(_clean_queue)
-        a_config = AdaptedConfigurationTestCaseMixin()
-        event = salt.utils.event.get_event('minion', sock_dir=a_config.get_config('minion')['sock_dir'], opts=a_config.get_config('minion'))
-        while True:
-            try:
-                events = event.get_event(full=False)
-            except Exception:
-                # This is broad but we'll see all kinds of issues right now
-                # if we drop the proc out from under the socket while we're reading
-                pass
-            q.put(events)
 
     def assertMinionEventFired(self, tag):
         #TODO

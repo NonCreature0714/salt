@@ -57,18 +57,18 @@ service, then set the reload value to True:
     :ref:`Requisites <requisites>` documentation.
 
 '''
-
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import time
 
 # Import Salt libs
-import salt.utils
+import salt.utils.data
+import salt.utils.platform
 from salt.utils.args import get_function_argspec as _argspec
 from salt.exceptions import CommandExecutionError
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 
 SYSTEMD_ONLY = ('no_block', 'unmask', 'unmask_runtime')
 
@@ -255,7 +255,12 @@ def _disable(name, started, result=True, **kwargs):
         return ret
 
     # Service can be disabled
-    before_toggle_disable_status = __salt__['service.disabled'](name)
+    if salt.utils.platform.is_windows():
+        # service.disabled in Windows returns True for services that are set to
+        # Manual start, so we need to check specifically for Disabled
+        before_toggle_disable_status = __salt__['service.info'](name)['StartType'] in ['Disabled']
+    else:
+        before_toggle_disable_status = __salt__['service.disabled'](name)
     if before_toggle_disable_status:
         # Service is disabled
         if started is True:
@@ -395,7 +400,7 @@ def running(name,
 
     # Convert enable to boolean in case user passed a string value
     if isinstance(enable, six.string_types):
-        enable = salt.utils.is_true(enable)
+        enable = salt.utils.data.is_true(enable)
 
     # Check if the service is available
     try:
@@ -432,7 +437,7 @@ def running(name,
         ret['comment'] = 'Service {0} is set to start'.format(name)
         return ret
 
-    if salt.utils.is_windows():
+    if salt.utils.platform.is_windows():
         if enable is True:
             ret.update(_enable(name, False, result=False, **kwargs))
 
@@ -534,7 +539,7 @@ def dead(name,
 
     # Convert enable to boolean in case user passed a string value
     if isinstance(enable, six.string_types):
-        enable = salt.utils.is_true(enable)
+        enable = salt.utils.data.is_true(enable)
 
     # Check if the service is available
     try:
@@ -556,7 +561,12 @@ def dead(name,
     # command, so it is just an indicator but can not be fully trusted
     before_toggle_status = __salt__['service.status'](name, sig)
     if 'service.enabled' in __salt__:
-        before_toggle_enable_status = __salt__['service.enabled'](name)
+        if salt.utils.platform.is_windows():
+            # service.enabled in Windows returns True for services that are set
+            # to Auto start, but services set to Manual can also be disabled
+            before_toggle_enable_status = __salt__['service.info'](name)['StartType'] in ['Auto', 'Manual']
+        else:
+            before_toggle_enable_status = __salt__['service.enabled'](name)
     else:
         before_toggle_enable_status = True
 
@@ -900,7 +910,7 @@ def mod_watch(name,
     try:
         result = func(name, **func_kwargs)
     except CommandExecutionError as exc:
-        ret['result'] = True
+        ret['result'] = False
         ret['comment'] = exc.strerror
         return ret
 

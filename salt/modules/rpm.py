@@ -4,17 +4,19 @@ Support for rpm
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import logging
 import os
 import re
 import datetime
+from salt.utils.versions import LooseVersion
 
 # Import Salt libs
-import salt.utils
+import salt.utils.decorators.path
 import salt.utils.itertools
-import salt.utils.decorators as decorators
+import salt.utils.path
 import salt.utils.pkg.rpm
+import salt.utils.versions
 # pylint: disable=import-error,redefined-builtin
 from salt.ext.six.moves import zip
 from salt.ext import six
@@ -44,7 +46,7 @@ def __virtual__():
     '''
     Confine this module to rpm based systems
     '''
-    if not salt.utils.which('rpm'):
+    if not salt.utils.path.which('rpm'):
         return (False, 'The rpm execution module failed to load: rpm binary is not in the path.')
     try:
         os_grain = __grains__['os'].lower()
@@ -183,7 +185,7 @@ def verify(*packages, **kwargs):
         try:
             ignore_types = [x.strip() for x in ignore_types.split(',')]
         except AttributeError:
-            ignore_types = [x.strip() for x in str(ignore_types).split(',')]
+            ignore_types = [x.strip() for x in six.text_type(ignore_types).split(',')]
 
     verify_options = kwargs.get('verify_options', [])
     if not isinstance(verify_options, (list, six.string_types)):
@@ -194,7 +196,7 @@ def verify(*packages, **kwargs):
         try:
             verify_options = [x.strip() for x in verify_options.split(',')]
         except AttributeError:
-            verify_options = [x.strip() for x in str(verify_options).split(',')]
+            verify_options = [x.strip() for x in six.text_type(verify_options).split(',')]
 
     cmd = ['rpm']
     cmd.extend(['--' + x for x in verify_options])
@@ -420,9 +422,9 @@ def owner(*paths):
     return ret
 
 
-@decorators.which('rpm2cpio')
-@decorators.which('cpio')
-@decorators.which('diff')
+@salt.utils.decorators.path.which('rpm2cpio')
+@salt.utils.decorators.path.which('cpio')
+@salt.utils.decorators.path.which('diff')
 def diff(package, path):
     '''
     Return a formatted diff between current file and original in a package.
@@ -452,7 +454,7 @@ def diff(package, path):
     return res
 
 
-def info(*packages, **attr):
+def info(*packages, **kwargs):
     '''
     Return a detailed package(s) summary information.
     If no packages specified, all packages will be returned.
@@ -466,6 +468,9 @@ def info(*packages, **attr):
             version, vendor, release, build_date, build_date_time_t, install_date, install_date_time_t,
             build_host, group, source_rpm, arch, epoch, size, license, signature, packager, url, summary, description.
 
+    :param all_versions:
+        Return information for all installed versions of the packages
+
     :return:
 
     CLI example:
@@ -475,7 +480,9 @@ def info(*packages, **attr):
         salt '*' lowpkg.info apache2 bash
         salt '*' lowpkg.info apache2 bash attr=version
         salt '*' lowpkg.info apache2 bash attr=version,build_date_iso,size
+        salt '*' lowpkg.info apache2 bash attr=version,build_date_iso,size all_versions=True
     '''
+    all_versions = kwargs.get('all_versions', False)
     # LONGSIZE is not a valid tag for all versions of rpm. If LONGSIZE isn't
     # available, then we can just use SIZE for older versions. See Issue #31366.
     rpm_tags = __salt__['cmd.run_stdout'](
@@ -515,7 +522,7 @@ def info(*packages, **attr):
         "edition": "edition: %|EPOCH?{%{EPOCH}:}|%{VERSION}-%{RELEASE}\\n",
     }
 
-    attr = attr.get('attr', None) and attr['attr'].split(",") or None
+    attr = kwargs.get('attr', None) and kwargs['attr'].split(",") or None
     query = list()
     if attr:
         for attr_k in attr:
@@ -543,7 +550,7 @@ def info(*packages, **attr):
         comment = ''
         if 'stderr' in call:
             comment += (call['stderr'] or call['stdout'])
-        raise CommandExecutionError('{0}'.format(comment))
+        raise CommandExecutionError(comment)
     elif 'error' in call['stderr']:
         raise CommandExecutionError(call['stderr'])
     else:
@@ -581,7 +588,7 @@ def info(*packages, **attr):
                 try:
                     pkg_data[key] = datetime.datetime.utcfromtimestamp(int(value)).isoformat() + "Z"
                 except ValueError:
-                    log.warning('Could not convert "{0}" into Unix time'.format(value))
+                    log.warning('Could not convert "%s" into Unix time', value)
                 continue
 
             # Convert Unix ticks into an Integer
@@ -589,7 +596,7 @@ def info(*packages, **attr):
                 try:
                     pkg_data[key] = int(value)
                 except ValueError:
-                    log.warning('Could not convert "{0}" into Unix time'.format(value))
+                    log.warning('Could not convert "%s" into Unix time', value)
                 continue
             if key not in ['description', 'name'] and value:
                 pkg_data[key] = value
@@ -603,14 +610,19 @@ def info(*packages, **attr):
     # pick only latest versions
     # (in case multiple packages installed, e.g. kernel)
     ret = dict()
-    for pkg_data in reversed(sorted(_ret, key=lambda x: x['edition'])):
+    for pkg_data in reversed(sorted(_ret, key=lambda x: LooseVersion(x['edition']))):
         pkg_name = pkg_data.pop('name')
         # Filter out GPG public keys packages
         if pkg_name.startswith('gpg-pubkey'):
             continue
         if pkg_name not in ret:
-            ret[pkg_name] = pkg_data.copy()
-            del ret[pkg_name]['edition']
+            if all_versions:
+                ret[pkg_name] = [pkg_data.copy()]
+            else:
+                ret[pkg_name] = pkg_data.copy()
+                del ret[pkg_name]['edition']
+        elif all_versions:
+            ret[pkg_name].append(pkg_data.copy())
 
     return ret
 
@@ -634,7 +646,9 @@ def version_cmp(ver1, ver2, ignore_epoch=False):
 
         salt '*' pkg.version_cmp '0.2-001' '0.2.0.1-002'
     '''
-    normalize = lambda x: str(x).split(':', 1)[-1] if ignore_epoch else str(x)
+    normalize = lambda x: six.text_type(x).split(':', 1)[-1] \
+        if ignore_epoch \
+        else six.text_type(x)
     ver1 = normalize(ver1)
     ver2 = normalize(ver2)
 
@@ -658,7 +672,7 @@ def version_cmp(ver1, ver2, ignore_epoch=False):
                 log.debug('rpmUtils.miscutils.compareEVR is not available')
 
         if cmp_func is None:
-            if salt.utils.which('rpmdev-vercmp'):
+            if salt.utils.path.which('rpmdev-vercmp'):
                 # rpmdev-vercmp always uses epochs, even when zero
                 def _ensure_epoch(ver):
                     def _prepend(ver):
@@ -687,7 +701,7 @@ def version_cmp(ver1, ver2, ignore_epoch=False):
                 elif result['retcode'] == 12:
                     return -1
                 else:
-                    # We'll need to fall back to salt.utils.version_cmp()
+                    # We'll need to fall back to salt.utils.versions.version_cmp()
                     log.warning(
                         'Failed to interpret results of rpmdev-vercmp output. '
                         'This is probably a bug, and should be reported. '
@@ -695,7 +709,7 @@ def version_cmp(ver1, ver2, ignore_epoch=False):
                         result['retcode'], result['stdout']
                     )
             else:
-                # We'll need to fall back to salt.utils.version_cmp()
+                # We'll need to fall back to salt.utils.versions.version_cmp()
                 log.warning(
                     'rpmdevtools is not installed, please install it for '
                     'more accurate version comparisons'
@@ -705,8 +719,8 @@ def version_cmp(ver1, ver2, ignore_epoch=False):
             # otherwise would be equal, ignore the release. This can happen if
             # e.g. you are checking if a package version 3.2 is satisfied by
             # 3.2-1.
-            (ver1_e, ver1_v, ver1_r) = salt.utils.str_version_to_evr(ver1)
-            (ver2_e, ver2_v, ver2_r) = salt.utils.str_version_to_evr(ver2)
+            (ver1_e, ver1_v, ver1_r) = salt.utils.pkg.rpm.version_to_evr(ver1)
+            (ver2_e, ver2_v, ver2_r) = salt.utils.pkg.rpm.version_to_evr(ver2)
             if not ver1_r or not ver2_r:
                 ver1_r = ver2_r = ''
 
@@ -727,7 +741,7 @@ def version_cmp(ver1, ver2, ignore_epoch=False):
     # We would already have normalized the versions at the beginning of this
     # function if ignore_epoch=True, so avoid unnecessary work and just pass
     # False for this value.
-    return salt.utils.version_cmp(ver1, ver2, ignore_epoch=False)
+    return salt.utils.versions.version_cmp(ver1, ver2, ignore_epoch=False)
 
 
 def checksum(*paths):

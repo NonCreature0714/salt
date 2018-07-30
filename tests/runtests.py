@@ -10,6 +10,7 @@ from __future__ import absolute_import, print_function
 import os
 import sys
 import time
+import warnings
 
 TESTS_DIR = os.path.dirname(os.path.normpath(os.path.abspath(__file__)))
 if os.name == 'nt':
@@ -57,9 +58,9 @@ except ImportError as exc:
     raise exc
 
 from tests.integration import TestDaemon  # pylint: disable=W0403
-import salt.utils
+import salt.utils.platform
 
-if not salt.utils.is_windows():
+if not salt.utils.platform.is_windows():
     import resource
 
 # Import Salt Testing libs
@@ -100,6 +101,9 @@ TEST_SUITES = {
     'unit':
        {'display_name': 'Unit',
         'path': 'unit'},
+    'kitchen':
+       {'display_name': 'Kitchen',
+        'path': 'kitchen'},
     'module':
        {'display_name': 'Module',
         'path': 'integration/modules'},
@@ -112,6 +116,9 @@ TEST_SUITES = {
     'client':
        {'display_name': 'Client',
         'path': 'integration/client'},
+    'doc':
+       {'display_name': 'Documentation',
+        'path': 'integration/doc'},
     'ext_pillar':
        {'display_name': 'External Pillar',
         'path': 'integration/pillar'},
@@ -130,6 +137,12 @@ TEST_SUITES = {
     'returners':
         {'display_name': 'Returners',
          'path': 'integration/returners'},
+    'ssh-int':
+        {'display_name': 'SSH Integration',
+         'path': 'integration/ssh'},
+    'spm':
+        {'display_name': 'SPM',
+         'path': 'integration/spm'},
     'loader':
        {'display_name': 'Loader',
         'path': 'integration/loader'},
@@ -160,6 +173,15 @@ TEST_SUITES = {
     'external_api':
         {'display_name': 'ExternalAPIs',
          'path': 'integration/externalapi'},
+    'daemons':
+        {'display_name': 'Daemon',
+         'path': 'integration/daemons'},
+    'scheduler':
+        {'display_name': 'Scheduler',
+         'path': 'integration/scheduler'},
+    'sdb':
+        {'display_name': 'Sdb',
+         'path': 'integration/sdb'},
 }
 
 
@@ -169,7 +191,7 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
     source_code_basedir = SALT_ROOT
 
     def _get_suites(self, include_unit=False, include_cloud_provider=False,
-                    include_proxy=False):
+                    include_proxy=False, include_kitchen=False):
         '''
         Return a set of all test suites except unit and cloud provider tests
         unless requested
@@ -181,28 +203,34 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             suites -= set(['cloud_provider'])
         if not include_proxy:
             suites -= set(['proxy'])
+        if not include_kitchen:
+            suites -= set(['kitchen'])
 
         return suites
 
     def _check_enabled_suites(self, include_unit=False,
-                              include_cloud_provider=False, include_proxy=False):
+                              include_cloud_provider=False,
+                              include_proxy=False,
+                              include_kitchen=False):
         '''
         Query whether test suites have been enabled
         '''
         suites = self._get_suites(include_unit=include_unit,
                                   include_cloud_provider=include_cloud_provider,
-                                  include_proxy=include_proxy)
+                                  include_proxy=include_proxy,
+                                  include_kitchen=include_kitchen)
 
         return any([getattr(self.options, suite) for suite in suites])
 
     def _enable_suites(self, include_unit=False, include_cloud_provider=False,
-                       include_proxy=False):
+                       include_proxy=False, include_kitchen=False):
         '''
         Enable test suites for current test run
         '''
         suites = self._get_suites(include_unit=include_unit,
                                   include_cloud_provider=include_cloud_provider,
-                                  include_proxy=include_proxy)
+                                  include_proxy=include_proxy,
+                                  include_kitchen=include_kitchen)
 
         for suite in suites:
             setattr(self.options, suite, True)
@@ -272,6 +300,15 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             help='Run tests for client'
         )
         self.test_selection_group.add_option(
+            '-d',
+            '--doc',
+            '--doc-tests',
+            dest='doc',
+            default=False,
+            action='store_true',
+            help='Run tests for documentation'
+        )
+        self.test_selection_group.add_option(
             '-I',
             '--ext-pillar',
             '--ext-pillar-tests',
@@ -339,6 +376,13 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             help='Run salt/returners/*.py tests'
         )
         self.test_selection_group.add_option(
+            '--spm',
+            dest='spm',
+            default=False,
+            action='store_true',
+            help='Run spm integration tests'
+        )
+        self.test_selection_group.add_option(
             '-l',
             '--loader',
             '--loader-tests',
@@ -355,6 +399,15 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             default=False,
             action='store_true',
             help='Run unit tests'
+        )
+        self.test_selection_group.add_option(
+            '-k',
+            '--kitchen',
+            '--kitchen-tests',
+            dest='kitchen',
+            default=False,
+            action='store_true',
+            help='Run kitchen tests'
         )
         self.test_selection_group.add_option(
             '--fileserver',
@@ -403,6 +456,14 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
                  'may be insecure! Default: False'
         )
         self.test_selection_group.add_option(
+            '--ssh-int',
+            dest='ssh-int',
+            action='store_true',
+            default=False,
+            help='Run salt-ssh integration tests. Requires to be run with --ssh'
+                 'to spin up the SSH server on your machine.'
+        )
+        self.test_selection_group.add_option(
             '-A',
             '--api',
             '--api-tests',
@@ -410,6 +471,14 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             action='store_true',
             default=False,
             help='Run salt-api tests'
+        )
+        self.test_selection_group.add_option(
+            '--sdb',
+            '--sdb-tests',
+            dest='sdb',
+            action='store_true',
+            default=False,
+            help='Run sdb tests'
         )
         self.test_selection_group.add_option(
             '-P',
@@ -429,41 +498,65 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             default=False,
             help='Run venafi runner tests'
         )
+        self.test_selection_group.add_option(
+            '--daemons',
+            '--daemon-tests',
+            dest='daemons',
+            action='store_true',
+            default=False,
+            help='Run salt/daemons/*.py tests'
+        )
+        self.test_selection_group.add_option(
+            '--scheduler',
+            dest='scheduler',
+            action='store_true',
+            default=False,
+            help='Run scheduler integration tests'
+        )
 
     def validate_options(self):
         if self.options.cloud_provider or self.options.external_api:
             # Turn on expensive tests execution
             os.environ['EXPENSIVE_TESTS'] = 'True'
 
-        import salt.utils
-        if salt.utils.is_windows():
+        # This fails even with salt.utils.platform imported in the global
+        # scope, unless we import it again here.
+        import salt.utils.platform
+        if salt.utils.platform.is_windows():
             import salt.utils.win_functions
             current_user = salt.utils.win_functions.get_current_user()
             if current_user == 'SYSTEM':
                 is_admin = True
             else:
                 is_admin = salt.utils.win_functions.is_admin(current_user)
+            if self.options.coverage and any((
+                        self.options.name,
+                        not is_admin,
+                        not self.options.run_destructive)) \
+                    and self._check_enabled_suites(include_unit=True):
+                warnings.warn("Test suite not running with elevated priviledges")
         else:
             is_admin = os.geteuid() == 0
 
-        if self.options.coverage and any((
-                    self.options.name,
-                    is_admin,
-                    not self.options.run_destructive)) \
-                and self._check_enabled_suites(include_unit=True):
-            self.error(
-                'No sense in generating the tests coverage report when '
-                'not running the full test suite, including the '
-                'destructive tests, as \'root\'. It would only produce '
-                'incorrect results.'
-            )
+            if self.options.coverage and any((
+                        self.options.name,
+                        not is_admin,
+                        not self.options.run_destructive)) \
+                    and self._check_enabled_suites(include_unit=True):
+                self.error(
+                    'No sense in generating the tests coverage report when '
+                    'not running the full test suite, including the '
+                    'destructive tests, as \'root\'. It would only produce '
+                    'incorrect results.'
+                )
 
         # When no tests are specifically enumerated on the command line, setup
         # a default run: +unit -cloud_provider
         if not self.options.name and not \
                 self._check_enabled_suites(include_unit=True,
                                            include_cloud_provider=True,
-                                           include_proxy=True):
+                                           include_proxy=True,
+                                           include_kitchen=True):
             self._enable_suites(include_unit=True)
 
         self.start_coverage(
@@ -487,10 +580,13 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         Run an integration test suite
         '''
         full_path = os.path.join(TEST_DIR, path)
-        return self.run_suite(full_path, display_name, suffix='test_*.py')
+        return self.run_suite(
+            full_path, display_name, suffix='test_*.py',
+            failfast=self.options.failfast,
+        )
 
     def start_daemons_only(self):
-        if not salt.utils.is_windows():
+        if not salt.utils.platform.is_windows():
             self.set_filehandle_limits('integration')
         try:
             print_header(
@@ -566,7 +662,7 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         for integration tests or unit tests
         '''
         # Get current limits
-        if salt.utils.is_windows():
+        if salt.utils.platform.is_windows():
             import win32file
             prev_hard = win32file._getmaxstdio()
             prev_soft = 512
@@ -602,7 +698,7 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
                 '{0}, hard: {1}'.format(soft, hard)
             )
             try:
-                if salt.utils.is_windows():
+                if salt.utils.platform.is_windows():
                     hard = 2048 if hard > 2048 else hard
                     win32file._setmaxstdio(hard)
                 else:
@@ -627,19 +723,19 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
 
         if self.options.name:
             for test in self.options.name:
-                if test.startswith(('tests.unit.', 'unit.')):
+                if test.startswith(('tests.unit.', 'unit.', 'test.kitchen.', 'kitchen.')):
                     named_unit_test.append(test)
                     continue
                 named_tests.append(test)
 
-        if (self.options.unit or named_unit_test) and not named_tests and not \
+        if (self.options.unit or self.options.kitchen or named_unit_test) and not named_tests and not \
                 self._check_enabled_suites(include_cloud_provider=True):
             # We're either not running any integration test suites, or we're
             # only running unit tests by passing --unit or by passing only
             # `unit.<whatever>` to --name.  We don't need the tests daemon
             # running
             return [True]
-        if not salt.utils.is_windows():
+        if not salt.utils.platform.is_windows():
             self.set_filehandle_limits('integration')
 
         try:
@@ -658,6 +754,9 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         with TestDaemon(self):
             if self.options.name:
                 for name in self.options.name:
+                    name = name.strip()
+                    if not name:
+                        continue
                     if os.path.isfile(name):
                         if not name.endswith('.py'):
                             continue
@@ -666,13 +765,18 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
                         results = self.run_suite(os.path.dirname(name),
                                                  name,
                                                  suffix=os.path.basename(name),
+                                                 failfast=self.options.failfast,
                                                  load_from_name=False)
                         status.append(results)
                         continue
                     if name.startswith(('tests.unit.', 'unit.')):
                         continue
-                    results = self.run_suite('', name, suffix='test_*.py', load_from_name=True)
+                    results = self.run_suite(
+                        '', name, suffix='test_*.py', load_from_name=True,
+                        failfast=self.options.failfast,
+                    )
                     status.append(results)
+                return status
             for suite in TEST_SUITES:
                 if suite != 'unit' and getattr(self.options, suite):
                     status.append(self.run_integration_suite(**TEST_SUITES[suite]))
@@ -700,7 +804,8 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             self.set_filehandle_limits('unit')
 
             results = self.run_suite(
-                os.path.join(TEST_DIR, 'unit'), 'Unit', suffix='test_*.py'
+                os.path.join(TEST_DIR, 'unit'), 'Unit', suffix='test_*.py',
+                failfast=self.options.failfast,
             )
             status.append(results)
             # We executed ALL unittests, we can skip running unittests by name
@@ -709,13 +814,47 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
 
         for name in named_unit_test:
             results = self.run_suite(
-                os.path.join(TEST_DIR, 'unit'), name, suffix='test_*.py', load_from_name=True
+                os.path.join(TEST_DIR, 'unit'), name, suffix='test_*.py',
+                load_from_name=True, failfast=self.options.failfast,
+            )
+            status.append(results)
+        return status
+
+    def run_kitchen_tests(self):
+        '''
+        Execute the kitchen tests
+        '''
+        named_kitchen_test = []
+        if self.options.name:
+            for test in self.options.name:
+                if not test.startswith(('tests.kitchen.', 'kitchen.')):
+                    continue
+                named_kitchen_test.append(test)
+
+        if not self.options.kitchen and not named_kitchen_test:
+            # We are not explicitly running the unit tests and none of the
+            # names passed to --name is a unit test.
+            return [True]
+
+        status = []
+        if self.options.kitchen:
+            results = self.run_suite(
+                os.path.join(TEST_DIR, 'kitchen'), 'Kitchen', suffix='test_*.py'
+            )
+            status.append(results)
+            # We executed ALL unittests, we can skip running unittests by name
+            # below
+            return status
+
+        for name in named_kitchen_test:
+            results = self.run_suite(
+                os.path.join(TEST_DIR, 'kitchen'), name, suffix='test_*.py', load_from_name=True
             )
             status.append(results)
         return status
 
 
-def main():
+def main(**kwargs):
     '''
     Parse command line options for running specific tests
     '''
@@ -727,12 +866,20 @@ def main():
         )
         parser.parse_args()
 
+        # Override parser options (helpful when importing runtests.py and
+        # running from within a REPL). Using kwargs.items() to avoid importing
+        # six, as this feature will rarely be used.
+        for key, val in kwargs.items():
+            setattr(parser.options, key, val)
+
         overall_status = []
         if parser.options.interactive:
             parser.start_daemons_only()
         status = parser.run_integration_tests()
         overall_status.extend(status)
         status = parser.run_unit_tests()
+        overall_status.extend(status)
+        status = parser.run_kitchen_tests()
         overall_status.extend(status)
         false_count = overall_status.count(False)
 

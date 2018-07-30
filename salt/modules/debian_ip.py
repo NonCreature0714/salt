@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
-The networking module for Debian based distros
+The networking module for Debian-based distros
 
 References:
 
@@ -8,7 +8,7 @@ References:
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import functools
 import logging
 import os.path
@@ -19,14 +19,16 @@ import time
 # Import third party libs
 import jinja2
 import jinja2.exceptions
-import salt.ext.six as six
+from salt.ext import six
 from salt.ext.six.moves import StringIO  # pylint: disable=import-error,no-name-in-module
 
 # Import salt libs
-import salt.utils
+import salt.utils.dns
+import salt.utils.files
+import salt.utils.odict
+import salt.utils.stringutils
 import salt.utils.templates
 import salt.utils.validate.net
-import salt.utils.odict
 
 
 # Set up logging
@@ -45,7 +47,7 @@ __virtualname__ = 'ip'
 
 def __virtual__():
     '''
-    Confine this module to Debian based distros
+    Confine this module to Debian-based distros
     '''
     if __grains__['os_family'] == 'Debian':
         return __virtualname__
@@ -219,46 +221,31 @@ def _read_file(path):
     Reads and returns the contents of a text file
     '''
     try:
-        with salt.utils.flopen(path, 'rb') as contents:
-            return [salt.utils.to_str(line) for line in contents.readlines()]
+        with salt.utils.files.flopen(path, 'rb') as contents:
+            return [salt.utils.stringutils.to_str(line) for line in contents.readlines()]
     except (OSError, IOError):
         return ''
 
 
 def _parse_resolve():
     '''
-    Parse /etc/resolv.conf and return domainname
+    Parse /etc/resolv.conf
     '''
-    contents = _read_file(_DEB_RESOLV_FILE)
-    return contents
+    return salt.utils.dns.parse_resolv(_DEB_RESOLV_FILE)
 
 
 def _parse_domainname():
     '''
     Parse /etc/resolv.conf and return domainname
     '''
-    contents = _read_file(_DEB_RESOLV_FILE)
-    pattern = r'domain\s+(?P<domain_name>\S+)'
-    prog = re.compile(pattern)
-    for item in contents:
-        match = prog.match(item)
-        if match:
-            return match.group('domain_name')
-    return ''
+    return _parse_resolve().get('domain', '')
 
 
 def _parse_searchdomain():
     '''
     Parse /etc/resolv.conf and return searchdomain
     '''
-    contents = _read_file(_DEB_RESOLV_FILE)
-    pattern = r'search\s+(?P<search_domain>\S+)'
-    prog = re.compile(pattern)
-    for item in contents:
-        match = prog.match(item)
-        if match:
-            return match.group('search_domain')
-    return ''
+    return _parse_resolve().get('search', '')
 
 
 def _parse_hostname():
@@ -280,8 +267,9 @@ def _parse_current_network_settings():
     opts['networking'] = ''
 
     if os.path.isfile(_DEB_NETWORKING_FILE):
-        with salt.utils.fopen(_DEB_NETWORKING_FILE) as contents:
+        with salt.utils.files.fopen(_DEB_NETWORKING_FILE) as contents:
             for line in contents:
+                salt.utils.stringutils.to_unicode(line)
                 if line.startswith('#'):
                     continue
                 elif line.startswith('CONFIGURE_INTERFACES'):
@@ -424,7 +412,7 @@ DEBIAN_ATTR_TO_SALT_ATTR_MAP['hwaddress'] = 'hwaddress'
 IPV4_VALID_PROTO = ['bootp', 'dhcp', 'static', 'manual', 'loopback', 'ppp']
 
 IPV4_ATTR_MAP = {
-    'proto': __within(IPV4_VALID_PROTO, dtype=str),
+    'proto': __within(IPV4_VALID_PROTO, dtype=six.text_type),
     # ipv4 static & manual
     'address': __ipv4_quad,
     'netmask': __ipv4_netmask,
@@ -434,7 +422,7 @@ IPV4_ATTR_MAP = {
     'pointopoint':  __ipv4_quad,
     'hwaddress':  __mac,
     'mtu':  __int,
-    'scope': __within(['global', 'link', 'host'], dtype=str),
+    'scope': __within(['global', 'link', 'host'], dtype=six.text_type),
     # dhcp
     'hostname': __anything,
     'leasehours':  __int,
@@ -446,7 +434,7 @@ IPV4_ATTR_MAP = {
     'server':  __ipv4_quad,
     'hwaddr':  __mac,
     # tunnel
-    'mode':  __within(['gre', 'GRE', 'ipip', 'IPIP', '802.3ad'], dtype=str),
+    'mode':  __within(['gre', 'GRE', 'ipip', 'IPIP', '802.3ad'], dtype=six.text_type),
     'endpoint':  __ipv4_quad,
     'dstaddr':  __ipv4_quad,
     'local':  __ipv4_quad,
@@ -482,7 +470,7 @@ IPV6_ATTR_MAP = {
     'gateway': __ipv6,  # supports a colon-delimited list
     'hwaddress':  __mac,
     'mtu':  __int,
-    'scope': __within(['global', 'site', 'link', 'host'], dtype=str),
+    'scope': __within(['global', 'site', 'link', 'host'], dtype=six.text_type),
     # inet6 auto
     'privext': __within([0, 1, 2], dtype=int),
     'dhcp':  __within([0, 1], dtype=int),
@@ -496,7 +484,7 @@ IPV6_ATTR_MAP = {
     # bond
     'slaves': __anything,
     # tunnel
-    'mode':  __within(['gre', 'GRE', 'ipip', 'IPIP', '802.3ad'], dtype=str),
+    'mode':  __within(['gre', 'GRE', 'ipip', 'IPIP', '802.3ad'], dtype=six.text_type),
     'endpoint': __ipv4_quad,
     'local':  __ipv4_quad,
     'ttl':  __int,
@@ -574,10 +562,11 @@ def _parse_interfaces(interface_files=None):
     method = -1
 
     for interface_file in interface_files:
-        with salt.utils.fopen(interface_file) as interfaces:
+        with salt.utils.files.fopen(interface_file) as interfaces:
             # This ensures iface_dict exists, but does not ensure we're not reading a new interface.
             iface_dict = {}
             for line in interfaces:
+                line = salt.utils.stringutils.to_unicode(line)
                 # Identify the clauses by the first word of each line.
                 # Go to the next line if the current line is a comment
                 # or all spaces.
@@ -723,7 +712,7 @@ def _parse_ethtool_opts(opts, iface):
 
     if 'speed' in opts:
         valid = ['10', '100', '1000', '10000']
-        if str(opts['speed']) in valid:
+        if six.text_type(opts['speed']) in valid:
             config.update({'speed': opts['speed']})
         else:
             _raise_error_iface(iface, opts['speed'], valid)
@@ -1388,7 +1377,7 @@ def _parse_settings_eth(opts, iface_type, enabled, iface):
     for opt in ['up_cmds', 'pre_up_cmds', 'post_up_cmds',
                 'down_cmds', 'pre_down_cmds', 'post_down_cmds']:
         if opt in opts:
-            iface_data['inet'][opt] = opts[opt]
+            iface_data[def_addrfam][opt] = opts[opt]
 
     for addrfam in ['inet', 'inet6']:
         if 'addrfam' in iface_data[addrfam] and iface_data[addrfam]['addrfam'] == addrfam:
@@ -1489,8 +1478,8 @@ def _write_file(iface, data, folder, pattern):
         msg = msg.format(filename, folder)
         log.error(msg)
         raise AttributeError(msg)
-    with salt.utils.flopen(filename, 'w') as fout:
-        fout.write(data)
+    with salt.utils.files.flopen(filename, 'w') as fout:
+        fout.write(salt.utils.stringutils.to_str(data))
     return filename
 
 
@@ -1514,8 +1503,8 @@ def _write_file_routes(iface, data, folder, pattern):
         msg = msg.format(filename, folder)
         log.error(msg)
         raise AttributeError(msg)
-    with salt.utils.flopen(filename, 'w') as fout:
-        fout.write(data)
+    with salt.utils.files.flopen(filename, 'w') as fout:
+        fout.write(salt.utils.stringutils.to_str(data))
 
     __salt__['file.set_mode'](filename, '0755')
     return filename
@@ -1533,8 +1522,8 @@ def _write_file_network(data, filename, create=False):
         msg = msg.format(filename)
         log.error(msg)
         raise AttributeError(msg)
-    with salt.utils.flopen(filename, 'w') as fout:
-        fout.write(data)
+    with salt.utils.files.flopen(filename, 'w') as fout:
+        fout.write(salt.utils.stringutils.to_str(data))
 
 
 def _read_temp(data):
@@ -1561,7 +1550,7 @@ def _read_temp_ifaces(iface, data):
         return ''
 
     ifcfg = template.render({'name': iface, 'data': data})
-    # Return as a array so the difflib works
+    # Return as an array so the difflib works
     return [item + '\n' for item in ifcfg.split('\n')]
 
 
@@ -1609,13 +1598,13 @@ def _write_file_ifaces(iface, data, **settings):
         msg = msg.format(os.path.dirname(filename))
         log.error(msg)
         raise AttributeError(msg)
-    with salt.utils.flopen(filename, 'w') as fout:
+    with salt.utils.files.flopen(filename, 'w') as fout:
         if _SEPARATE_FILE:
-            fout.write(saved_ifcfg)
+            fout.write(salt.utils.stringutils.to_str(saved_ifcfg))
         else:
-            fout.write(ifcfg)
+            fout.write(salt.utils.stringutils.to_str(ifcfg))
 
-    # Return as a array so the difflib works
+    # Return as an array so the difflib works
     return saved_ifcfg.split('\n')
 
 
@@ -1642,10 +1631,10 @@ def _write_file_ppp_ifaces(iface, data):
         msg = msg.format(os.path.dirname(filename))
         log.error(msg)
         raise AttributeError(msg)
-    with salt.utils.fopen(filename, 'w') as fout:
-        fout.write(ifcfg)
+    with salt.utils.files.fopen(filename, 'w') as fout:
+        fout.write(salt.utils.stringutils.to_str(ifcfg))
 
-    # Return as a array so the difflib works
+    # Return as an array so the difflib works
     return filename
 
 
@@ -1702,7 +1691,6 @@ def build_interface(iface, iface_type, enabled, **settings):
         salt '*' ip.build_interface eth0 eth <settings>
     '''
 
-    iface = iface.lower()
     iface_type = iface_type.lower()
 
     if iface_type not in _IFACE_TYPES:
@@ -1772,7 +1760,6 @@ def build_routes(iface, **settings):
         salt '*' ip.build_routes eth0 <settings>
     '''
 
-    iface = iface.lower()
     opts = _parse_routes(iface, settings)
     try:
         template = JINJA.get_template('route_eth.jinja')
@@ -2037,18 +2024,11 @@ def build_network_settings(**settings):
         # Write settings
         _write_file_network(network, _DEB_NETWORKING_FILE, True)
 
-    # Write hostname to /etc/hostname
+    # Get hostname and domain from opts
     sline = opts['hostname'].split('.', 1)
     opts['hostname'] = sline[0]
-    hostname = '{0}\n' . format(opts['hostname'])
     current_domainname = current_network_settings['domainname']
     current_searchdomain = current_network_settings['searchdomain']
-
-    # Only write the hostname if it has changed
-    if not opts['hostname'] == current_network_settings['hostname']:
-        if not ('test' in settings and settings['test']):
-            # TODO  replace wiht a call to network.mod_hostname instead
-            _write_file_network(hostname, _DEB_HOSTNAME_FILE)
 
     new_domain = False
     if len(sline) > 1:
@@ -2081,38 +2061,29 @@ def build_network_settings(**settings):
     # If the domain changes, then we should write the resolv.conf file.
     if new_domain or new_search:
         # Look for existing domain line and update if necessary
-        contents = _parse_resolve()
-        domain_prog = re.compile(r'domain\s+(?P<domain_name>\S+)')
-        search_prog = re.compile(r'search\s+(?P<search_domain>\S+)')
+        resolve = _parse_resolve()
+        domain_prog = re.compile(r'domain\s+')
+        search_prog = re.compile(r'search\s+')
         new_contents = []
-        found_domain = False
-        found_search = False
-        for item in contents:
-            domain_match = domain_prog.match(item)
-            search_match = search_prog.match(item)
-            if domain_match:
-                new_contents.append('domain {0}\n' . format(domainname))
-                found_domain = True
-            elif search_match:
-                new_contents.append('search {0}\n' . format(searchdomain))
-                found_search = True
-            else:
-                new_contents.append(item)
+
+        for item in _read_file(_DEB_RESOLV_FILE):
+            if domain_prog.match(item):
+                item = 'domain {0}'.format(domainname)
+            elif search_prog.match(item):
+                item = 'search {0}'.format(searchdomain)
+            new_contents.append(item)
 
         # A domain line didn't exist so we'll add one in
         # with the new domainname
-        if not found_domain:
-            new_contents.insert(0, 'domain {0}\n' . format(domainname))
+        if 'domain' not in resolve:
+            new_contents.insert(0, 'domain {0}' . format(domainname))
 
         # A search line didn't exist so we'll add one in
         # with the new search domain
-        if not found_search:
-            if new_contents[0].startswith('domain'):
-                new_contents.insert(1, 'search {0}\n' . format(searchdomain))
-            else:
-                new_contents.insert(0, 'search {0}\n' . format(searchdomain))
+        if 'search' not in resolve:
+            new_contents.insert('domain' in resolve, 'search {0}'.format(searchdomain))
 
-        new_resolv = ''.join(new_contents)
+        new_resolv = '\n'.join(new_contents)
 
         # Write /etc/resolv.conf
         if not ('test' in settings and settings['test']):

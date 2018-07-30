@@ -3,14 +3,16 @@
 Common functions for managing package refreshes during states
 '''
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import errno
 import logging
 import os
 import re
 
 # Import Salt libs
-import salt.utils
+import salt.utils.data
+import salt.utils.files
+import salt.utils.versions
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ def write_rtag(opts):
     rtag_file = rtag(opts)
     if not os.path.exists(rtag_file):
         try:
-            with salt.utils.fopen(rtag_file, 'w+'):
+            with salt.utils.files.fopen(rtag_file, 'w+'):
                 pass
         except OSError as exc:
             log.warning('Encountered error writing rtag: %s', exc.__str__())
@@ -60,17 +62,16 @@ def check_refresh(opts, refresh=None):
     - A boolean if refresh is not False and the rtag file exists
     '''
     return bool(
-        salt.utils.is_true(refresh) or
+        salt.utils.data.is_true(refresh) or
         (os.path.isfile(rtag(opts)) and refresh is not False)
     )
 
 
 def split_comparison(version):
-    match = re.match(r'^([<>])?(=)?([^<>=]+)$', version)
+    match = re.match(r'^(<=>|!=|>=|<=|>>|<<|<>|>|<|=)?\s?([^<>=]+)$', version)
     if match:
         comparison = match.group(1) or ''
-        comparison += match.group(2) or ''
-        version = match.group(3)
+        version = match.group(2)
     else:
         comparison = ''
     return comparison, version
@@ -85,7 +86,7 @@ def match_version(desired, available, cmp_func=None, ignore_epoch=False):
     if not oper:
         oper = '=='
     for candidate in available:
-        if salt.utils.compare_versions(ver1=candidate,
+        if salt.utils.versions.compare(ver1=candidate,
                                        oper=oper,
                                        ver2=version,
                                        cmp_func=cmp_func,

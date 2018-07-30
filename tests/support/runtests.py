@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
-    :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
+    :codeauthor: Pedro Algarvio (pedro@algarvio.me)
 
     .. _runtime_vars:
 
@@ -49,17 +49,18 @@
 # Import Python modules
 from __future__ import absolute_import, print_function
 import os
-import sys
-import json
 import shutil
 import logging
 import multiprocessing
 
+import salt.utils.json
+
 # Import tests support libs
 import tests.support.paths as paths
+import tests.support.helpers
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 try:
     import coverage  # pylint: disable=import-error
     HAS_COVERAGE = True
@@ -78,7 +79,7 @@ try:
         coverage_object.save()
 
     def multiprocessing_start(obj):
-        coverage_options = json.loads(os.environ.get('SALT_RUNTESTS_COVERAGE_OPTIONS', '{}'))
+        coverage_options = salt.utils.json.loads(os.environ.get('SALT_RUNTESTS_COVERAGE_OPTIONS', '{}'))
         if not coverage_options:
             return
 
@@ -103,12 +104,9 @@ try:
 except ImportError:
     pass
 
-if sys.platform.startswith('win'):
-    import win32api  # pylint: disable=import-error
-    RUNNING_TESTS_USER = win32api.GetUserName()
-else:
-    import pwd
-    RUNNING_TESTS_USER = pwd.getpwuid(os.getuid()).pw_name
+
+RUNNING_TESTS_USER = tests.support.helpers.this_user()
+
 
 log = logging.getLogger(__name__)
 
@@ -206,6 +204,7 @@ RUNTIME_VARS = RuntimeVars(
     TMP_CONF_DIR=paths.TMP_CONF_DIR,
     TMP_CONF_MASTER_INCLUDES=os.path.join(paths.TMP_CONF_DIR, 'master.d'),
     TMP_CONF_MINION_INCLUDES=os.path.join(paths.TMP_CONF_DIR, 'minion.d'),
+    TMP_CONF_PROXY_INCLUDES=os.path.join(paths.TMP_CONF_DIR, 'proxy.d'),
     TMP_CONF_CLOUD_INCLUDES=os.path.join(paths.TMP_CONF_DIR, 'cloud.conf.d'),
     TMP_CONF_CLOUD_PROFILE_INCLUDES=os.path.join(paths.TMP_CONF_DIR, 'cloud.profiles.d'),
     TMP_CONF_CLOUD_PROVIDER_INCLUDES=os.path.join(paths.TMP_CONF_DIR, 'cloud.providers.d'),
@@ -214,6 +213,7 @@ RUNTIME_VARS = RuntimeVars(
     TMP_SYNDIC_MINION_CONF_DIR=paths.TMP_SYNDIC_MINION_CONF_DIR,
     TMP_SCRIPT_DIR=paths.TMP_SCRIPT_DIR,
     TMP_STATE_TREE=paths.TMP_STATE_TREE,
+    TMP_PILLAR_TREE=paths.TMP_PILLAR_TREE,
     TMP_PRODENV_STATE_TREE=paths.TMP_PRODENV_STATE_TREE,
     RUNNING_TESTS_USER=RUNNING_TESTS_USER,
     RUNTIME_CONFIGS={}

@@ -89,7 +89,7 @@ functions include:
 A good, well commented example of this process is the Fedora deployment
 script:
 
-https://github.com/saltstack/salt-cloud/blob/master/saltcloud/deploy/Fedora.sh
+https://github.com/saltstack/salt/blob/develop/salt/cloud/deploy/Fedora.sh
 
 A number of legacy deploy scripts are included with the release tarball. None
 of them are as functional or complete as Salt Bootstrap, and are still included
@@ -257,4 +257,4 @@ This has also been tested to work with pipes, if needed:
 
 .. code-block:: yaml
 
-    script_args: | head
+    script_args: '| head'

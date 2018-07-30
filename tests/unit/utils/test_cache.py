@@ -7,7 +7,7 @@
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import os
 import time
 import tempfile
@@ -19,7 +19,7 @@ from tests.support.unit import TestCase
 # Import salt libs
 import salt.config
 import salt.loader
-from salt.utils import cache
+import salt.utils.cache as cache
 
 
 class CacheDictTestCase(TestCase):
@@ -77,7 +77,7 @@ class CacheContextTestCase(TestCase):
     def test_context_wrapper(self):
         '''
         Test to ensure that a module which decorates itself
-        with a context cache can store and retreive its contextual
+        with a context cache can store and retrieve its contextual
         data
         '''
         opts = salt.config.DEFAULT_MINION_OPTS

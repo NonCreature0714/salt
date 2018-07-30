@@ -4,22 +4,24 @@ Helpful decorators for module writing
 '''
 
 # Import python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
+import errno
 import inspect
 import logging
+import subprocess
+import sys
 import time
 from functools import wraps
 from collections import defaultdict
 
 # Import salt libs
-import salt.utils
 import salt.utils.args
-from salt.exceptions import CommandNotFoundError, CommandExecutionError, SaltConfigurationError
-from salt.version import SaltStackVersion, __saltstack_version__
+import salt.utils.data
+from salt.exceptions import CommandExecutionError, SaltConfigurationError
 from salt.log import LOG_LEVELS
 
 # Import 3rd-party libs
-import salt.ext.six as six
+from salt.ext import six
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ class Depends(object):
     '''
     This decorator will check the module when it is loaded and check that the
     dependencies passed in are in the globals of the module. If not, it will
-    cause the function to be unloaded (or replaced)
+    cause the function to be unloaded (or replaced).
     '''
     # kind -> Dependency -> list of things that depend on it
     dependency_dict = defaultdict(lambda: defaultdict(dict))
@@ -40,6 +42,8 @@ class Depends(object):
 
         An example use of this would be:
 
+        .. code-block:: python
+
             @depends('modulename')
             def test():
                 return 'foo'
@@ -49,15 +53,36 @@ class Depends(object):
             @depends('modulename', fallback_function=function)
             def test():
                 return 'foo'
-        '''
 
+        .. code-block:: python
+
+        This can also be done with the retcode of a command, using the
+        ``retcode`` argument:
+
+            @depends('/opt/bin/check_cmd', retcode=0)
+            def test():
+                return 'foo'
+
+        It is also possible to check for any nonzero retcode using the
+        ``nonzero_retcode`` argument:
+
+            @depends('/opt/bin/check_cmd', nonzero_retcode=True)
+            def test():
+                return 'foo'
+
+        .. note::
+            The command must be formatted as a string, not a list of args.
+            Additionally, I/O redirection and other shell-specific syntax are
+            not supported since this uses shell=False when calling
+            subprocess.Popen().
+
+        '''
         log.trace(
-            'Depends decorator instantiated with dep list of {0}'.format(
-                dependencies
-            )
+            'Depends decorator instantiated with dep list of %s and kwargs %s',
+            dependencies, kwargs
         )
         self.dependencies = dependencies
-        self.fallback_function = kwargs.get('fallback_function')
+        self.params = kwargs
 
     def __call__(self, function):
         '''
@@ -75,12 +100,29 @@ class Depends(object):
             _, kind, mod_name = frame.f_globals['__name__'].rsplit('.', 2)
             fun_name = function.__name__
             for dep in self.dependencies:
-                self.dependency_dict[kind][dep][(mod_name, fun_name)] = \
-                        (frame, self.fallback_function)
+                self.dependency_dict[kind][dep][(mod_name, fun_name)] = (frame, self.params)
         except Exception as exc:
-            log.error('Exception encountered when attempting to inspect frame in '
-                      'dependency decorator: {0}'.format(exc))
+            log.exception(
+                'Exception encountered when attempting to inspect frame in '
+                'dependency decorator'
+            )
         return function
+
+    @staticmethod
+    def run_command(dependency, mod_name, func_name):
+        full_name = '{0}.{1}'.format(mod_name, func_name)
+        log.trace('Running \'%s\' for \'%s\'', dependency, full_name)
+        import salt.utils.args
+        args = salt.utils.args.shlex_split(dependency)
+        proc = subprocess.Popen(args,
+                                shell=False,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        output = proc.communicate()[0]
+        retcode = proc.returncode
+        log.trace('Output from \'%s\': %s', dependency, output)
+        log.trace('Retcode from \'%s\': %d', dependency, retcode)
+        return retcode
 
     @classmethod
     def enforce_dependencies(cls, functions, kind):
@@ -91,34 +133,54 @@ class Depends(object):
         are missing dependencies.
         '''
         for dependency, dependent_dict in six.iteritems(cls.dependency_dict[kind]):
-            for (mod_name, func_name), (frame, fallback_function) in six.iteritems(dependent_dict):
+            for (mod_name, func_name), (frame, params) in six.iteritems(dependent_dict):
+                if 'retcode' in params or 'nonzero_retcode' in params:
+                    try:
+                        retcode = cls.run_command(dependency, mod_name, func_name)
+                    except OSError as exc:
+                        if exc.errno == errno.ENOENT:
+                            log.trace(
+                                'Failed to run command %s, %s not found',
+                                dependency, exc.filename
+                            )
+                        else:
+                            log.trace(
+                                'Failed to run command \'%s\': %s', dependency, exc
+                            )
+                        retcode = -1
+
+                    if 'retcode' in params:
+                        if params['retcode'] == retcode:
+                            continue
+
+                    elif 'nonzero_retcode' in params:
+                        if params['nonzero_retcode']:
+                            if retcode != 0:
+                                continue
+                        else:
+                            if retcode == 0:
+                                continue
+
                 # check if dependency is loaded
-                if dependency is True:
+                elif dependency is True:
                     log.trace(
-                        'Dependency for {0}.{1} exists, not unloading'.format(
-                            mod_name,
-                            func_name
-                        )
+                        'Dependency for %s.%s exists, not unloading',
+                        mod_name, func_name
                     )
                     continue
+
                 # check if you have the dependency
-                if dependency in frame.f_globals \
+                elif dependency in frame.f_globals \
                         or dependency in frame.f_locals:
                     log.trace(
-                        'Dependency ({0}) already loaded inside {1}, '
-                        'skipping'.format(
-                            dependency,
-                            mod_name
-                        )
+                        'Dependency (%s) already loaded inside %s, skipping',
+                        dependency, mod_name
                     )
                     continue
+
                 log.trace(
-                    'Unloading {0}.{1} because dependency ({2}) is not '
-                    'imported'.format(
-                        mod_name,
-                        func_name,
-                        dependency
-                    )
+                    'Unloading %s.%s because dependency (%s) is not met',
+                    mod_name, func_name, dependency
                 )
                 # if not, unload the function
                 if frame:
@@ -134,13 +196,14 @@ class Depends(object):
                         continue
 
                     try:
+                        fallback_function = params.get('fallback_function')
                         if fallback_function is not None:
                             functions[mod_key] = fallback_function
                         else:
                             del functions[mod_key]
                     except AttributeError:
                         # we already did???
-                        log.trace('{0} already removed, skipping'.format(mod_key))
+                        log.trace('%s already removed, skipping', mod_key)
                         continue
 
 
@@ -154,82 +217,18 @@ def timing(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
         start_time = time.time()
-        ret = function(*args, **salt.utils.clean_kwargs(**kwargs))
+        ret = function(*args, **salt.utils.args.clean_kwargs(**kwargs))
         end_time = time.time()
         if function.__module__.startswith('salt.loaded.int.'):
             mod_name = function.__module__[16:]
         else:
             mod_name = function.__module__
-        log.profile(
-            'Function {0}.{1} took {2:.20f} seconds to execute'.format(
-                mod_name,
-                function.__name__,
-                end_time - start_time
-            )
+        fstr = 'Function %s.%s took %.{0}f seconds to execute'.format(
+            sys.float_info.dig
         )
+        log.profile(fstr, mod_name, function.__name__, end_time - start_time)
         return ret
     return wrapped
-
-
-def which(exe):
-    '''
-    Decorator wrapper for salt.utils.which
-    '''
-    def wrapper(function):
-        def wrapped(*args, **kwargs):
-            if salt.utils.which(exe) is None:
-                raise CommandNotFoundError(
-                    'The \'{0}\' binary was not found in $PATH.'.format(exe)
-                )
-            return function(*args, **kwargs)
-        return identical_signature_wrapper(function, wrapped)
-    return wrapper
-
-
-def which_bin(exes):
-    '''
-    Decorator wrapper for salt.utils.which_bin
-    '''
-    def wrapper(function):
-        def wrapped(*args, **kwargs):
-            if salt.utils.which_bin(exes) is None:
-                raise CommandNotFoundError(
-                    'None of provided binaries({0}) was not found '
-                    'in $PATH.'.format(
-                        ['\'{0}\''.format(exe) for exe in exes]
-                    )
-                )
-            return function(*args, **kwargs)
-        return identical_signature_wrapper(function, wrapped)
-    return wrapper
-
-
-def identical_signature_wrapper(original_function, wrapped_function):
-    '''
-    Return a function with identical signature as ``original_function``'s which
-    will call the ``wrapped_function``.
-    '''
-    context = {'__wrapped__': wrapped_function}
-    function_def = compile(
-        'def {0}({1}):\n'
-        '    return __wrapped__({2})'.format(
-            # Keep the original function name
-            original_function.__name__,
-            # The function signature including defaults, i.e., 'timeout=1'
-            inspect.formatargspec(
-                *salt.utils.args.get_function_argspec(original_function)
-            )[1:-1],
-            # The function signature without the defaults
-            inspect.formatargspec(
-                formatvalue=lambda val: '',
-                *salt.utils.args.get_function_argspec(original_function)
-            )[1:-1]
-        ),
-        '<string>',
-        'exec'
-    )
-    six.exec_(function_def, context)
-    return wraps(original_function)(context[original_function.__name__])
 
 
 def memoize(func):
@@ -245,7 +244,14 @@ def memoize(func):
 
     @wraps(func)
     def _memoize(*args, **kwargs):
-        args_ = ','.join(list(args) + ['{0}={1}'.format(k, kwargs[k]) for k in sorted(kwargs)])
+        str_args = []
+        for arg in args:
+            if not isinstance(arg, six.string_types):
+                str_args.append(six.text_type(arg))
+            else:
+                str_args.append(arg)
+
+        args_ = ','.join(list(str_args) + ['{0}={1}'.format(k, kwargs[k]) for k in sorted(kwargs)])
         if args_ not in cache:
             cache[args_] = func(*args, **kwargs)
         return cache[args_]
@@ -270,7 +276,7 @@ class _DeprecationDecorator(object):
         :param version: Expiration version
         :return:
         '''
-
+        from salt.version import SaltStackVersion, __saltstack_version__
         self._globals = globals
         self._exp_version_name = version
         self._exp_version = SaltStackVersion.from_name(self._exp_version_name)
@@ -281,22 +287,13 @@ class _DeprecationDecorator(object):
 
     def _get_args(self, kwargs):
         '''
-        Extract function-specific keywords from all of the kwargs.
+        Discard all keywords which aren't function-specific from the kwargs.
 
         :param kwargs:
         :return:
         '''
         _args = list()
-        _kwargs = dict()
-
-        if '__pub_arg' in kwargs:  # For modules
-            for arg_item in kwargs.get('__pub_arg', list()):
-                if type(arg_item) == dict:
-                    _kwargs.update(arg_item.copy())
-                else:
-                    _args.append(arg_item)
-        else:
-            _kwargs = kwargs.copy()  # For states
+        _kwargs = salt.utils.args.clean_kwargs(**kwargs)
 
         return _args, _kwargs
 
@@ -314,14 +311,17 @@ class _DeprecationDecorator(object):
             try:
                 return self._function(*args, **kwargs)
             except TypeError as error:
-                error = str(error).replace(self._function, self._orig_f_name)  # Hide hidden functions
-                log.error('Function "{f_name}" was not properly called: {error}'.format(f_name=self._orig_f_name,
-                                                                                        error=error))
+                error = six.text_type(error).replace(self._function, self._orig_f_name)  # Hide hidden functions
+                log.error(
+                    'Function "%s" was not properly called: %s',
+                    self._orig_f_name, error
+                )
                 return self._function.__doc__
             except Exception as error:
-                log.error('Unhandled exception occurred in '
-                          'function "{f_name}: {error}'.format(f_name=self._function.__name__,
-                                                               error=error))
+                log.error(
+                    'Unhandled exception occurred in function "%s: %s',
+                    self._function.__name__, error
+                )
                 raise error
         else:
             raise CommandExecutionError("Function is deprecated, but the successor function was not found.")
@@ -534,8 +534,14 @@ class _WithDeprecated(_DeprecationDecorator):
                 f_name=function.__name__))
 
         opts = self._globals.get('__opts__', '{}')
-        use_deprecated = full_name in opts.get(self.CFG_USE_DEPRECATED, list())
-        use_superseded = full_name in opts.get(self.CFG_USE_SUPERSEDED, list())
+        pillar = self._globals.get('__pillar__', '{}')
+
+        use_deprecated = (full_name in opts.get(self.CFG_USE_DEPRECATED, list()) or
+                          full_name in pillar.get(self.CFG_USE_DEPRECATED, list()))
+
+        use_superseded = (full_name in opts.get(self.CFG_USE_SUPERSEDED, list()) or
+                          full_name in pillar.get(self.CFG_USE_SUPERSEDED, list()))
+
         if use_deprecated and use_superseded:
             raise SaltConfigurationError("Function '{0}' is mentioned both in deprecated "
                                          "and superseded sections. Please remove any of that.".format(full_name))
@@ -557,8 +563,11 @@ class _WithDeprecated(_DeprecationDecorator):
             f_name=self._orig_f_name)
 
         return func_path in self._globals.get('__opts__').get(
+            self.CFG_USE_DEPRECATED, list()) or func_path in self._globals.get('__pillar__').get(
             self.CFG_USE_DEPRECATED, list()) or (self._policy == self.OPT_IN
                                                  and not (func_path in self._globals.get('__opts__', {}).get(
+                                                          self.CFG_USE_SUPERSEDED, list()))
+                                                 and not (func_path in self._globals.get('__pillar__', {}).get(
                                                           self.CFG_USE_SUPERSEDED, list()))), func_path
 
     def __call__(self, function):
@@ -635,26 +644,17 @@ def ignores_kwargs(*kwarg_names):
     return _ignores_kwargs
 
 
-class JinjaFilter(object):
+def ensure_unicode_args(function):
     '''
-    This decorator is used to specify that a function is to be loaded as a
-    Jinja filter.
+    Decodes all arguments passed to the wrapped function
     '''
-    salt_jinja_filters = {}
-
-    def __init__(self, name=None):
-        '''
-        '''
-        self.name = name
-
-    def __call__(self, function):
-        '''
-        '''
-        name = self.name or function.__name__
-        if name not in self.salt_jinja_filters:
-            log.debug('Marking "{0}" as a jinja filter'.format(name))
-            self.salt_jinja_filters[name] = function
-        return function
-
-
-jinja_filter = JinjaFilter
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if six.PY2:
+            return function(
+                *salt.utils.data.decode_list(args),
+                **salt.utils.data.decode_dict(kwargs)
+            )
+        else:
+            return function(*args, **kwargs)
+    return wrapped

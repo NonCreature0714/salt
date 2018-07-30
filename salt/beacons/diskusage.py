@@ -8,7 +8,7 @@ Beacon to monitor disk usage.
 '''
 
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 import logging
 import re
 
@@ -31,14 +31,14 @@ def __virtual__():
         return __virtualname__
 
 
-def __validate__(config):
+def validate(config):
     '''
     Validate the beacon configuration
     '''
     # Configuration for diskusage beacon should be a list of dicts
-    if not isinstance(config, dict):
+    if not isinstance(config, list):
         return False, ('Configuration for diskusage beacon '
-                       'must be a dictionary.')
+                       'must be a list.')
     return True, 'Valid beacon configuration'
 
 
@@ -63,8 +63,8 @@ def beacon(config):
         beacons:
           diskusage:
             -  interval: 120
-            - 'c:\': 90%
-            - 'd:\': 50%
+            - 'c:\\': 90%
+            - 'd:\\': 50%
 
     Regular expressions can be used as mount points.
 
@@ -73,38 +73,43 @@ def beacon(config):
         beacons:
           diskusage:
             - '^\/(?!home).*$': 90%
-            - '^[a-zA-Z]:\$': 50%
+            - '^[a-zA-Z]:\\$': 50%
 
     The first one will match all mounted disks beginning with "/", except /home
     The second one will match disks from A:\ to Z:\ on a Windows system
 
     Note that if a regular expression are evaluated after static mount points,
-    which means that if a regular expression matches an other defined mount point,
+    which means that if a regular expression matches another defined mount point,
     it will override the previously defined threshold.
 
     '''
-    parts = psutil.disk_partitions(all=False)
+    parts = psutil.disk_partitions(all=True)
     ret = []
     for mounts in config:
-        mount = mounts.keys()[0]
+        mount = next(iter(mounts))
 
-        try:
-            _current_usage = psutil.disk_usage(mount)
-        except OSError:
-            # Ensure a valid mount point
-            log.warning('{0} is not a valid mount point, try regex.'.format(mount))
-            for part in parts:
-                if re.match(mount, part.mountpoint):
-                    row = {}
-                    row[part.mountpoint] = mounts[mount]
-                    config.append(row)
-            continue
+        # Because we're using regular expressions
+        # if our mount doesn't end with a $, insert one.
+        mount_re = mount
+        if not mount.endswith('$'):
+            mount_re = '{0}$'.format(mount)
 
-        current_usage = _current_usage.percent
-        monitor_usage = mounts[mount]
-        if '%' in monitor_usage:
-            monitor_usage = re.sub('%', '', monitor_usage)
-        monitor_usage = float(monitor_usage)
-        if current_usage >= monitor_usage:
-            ret.append({'diskusage': current_usage, 'mount': mount})
+        for part in parts:
+            if re.match(mount_re, part.mountpoint):
+                _mount = part.mountpoint
+
+                try:
+                    _current_usage = psutil.disk_usage(mount)
+                except OSError:
+                    log.warning('%s is not a valid mount point.', mount)
+                    continue
+
+                current_usage = _current_usage.percent
+                monitor_usage = mounts[mount]
+                log.debug('current_usage %s', current_usage)
+                if '%' in monitor_usage:
+                    monitor_usage = re.sub('%', '', monitor_usage)
+                monitor_usage = float(monitor_usage)
+                if current_usage >= monitor_usage:
+                    ret.append({'diskusage': current_usage, 'mount': _mount})
     return ret

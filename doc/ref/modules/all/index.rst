@@ -11,6 +11,8 @@ execution modules
         salt.modules.group
         salt.modules.kernelpkg
         salt.modules.pkg
+        salt.modules.service
+        salt.modules.shadow
         salt.modules.user
 
 .. currentmodule:: salt.modules
@@ -29,6 +31,7 @@ execution modules
     apk
     aptpkg
     archive
+    arista_pyeapi
     artifactory
     at
     at_solaris
@@ -44,6 +47,7 @@ execution modules
     boto_apigateway
     boto_asg
     boto_cfn
+    boto_cloudfront
     boto_cloudtrail
     boto_cloudwatch
     boto_cloudwatch_event
@@ -82,6 +86,7 @@ execution modules
     chef
     chocolatey
     chronos
+    cimc
     cisconso
     cloud
     cmdmod
@@ -94,9 +99,9 @@ execution modules
     cron
     csf
     cyg
-    cytest
     daemontools
     data
+    datadog_api
     ddns
     deb_apache
     deb_postgres
@@ -117,6 +122,8 @@ execution modules
     drac
     dracr
     drbd
+    dummyproxy_package
+    dummyproxy_service
     ebuild
     eix
     elasticsearch
@@ -143,6 +150,7 @@ execution modules
     git
     github
     glance
+    glanceng
     glusterfs
     gnomedesktop
     gpg
@@ -184,7 +192,8 @@ execution modules
     iwtools
     jboss7
     jboss7_cli
-    jenkins
+    jenkinsmod
+    jira_mod
     junos
     k8s
     kapacitor
@@ -194,7 +203,9 @@ execution modules
     key
     keyboard
     keystone
+    keystoneng
     kmod
+    kubernetes
     launchctl
     layman
     ldap3
@@ -233,6 +244,7 @@ execution modules
     mac_user
     mac_xattr
     makeconf
+    mandrill
     marathon
     match
     mattermost
@@ -270,11 +282,14 @@ execution modules
     napalm_users
     napalm_yang_mod
     netaddress
+    netbox
     netbsd_sysctl
     netbsdservice
+    netmiko_mod
     netscaler
     network
     neutron
+    neutronng
     nfs3
     nftables
     nginx
@@ -284,6 +299,7 @@ execution modules
     npm
     nspawn
     nxos
+    nxos_api
     omapi
     openbsd_sysctl
     openbsdpkg
@@ -294,17 +310,21 @@ execution modules
     openstack_mng
     openvswitch
     opkg
+    opsgenie
     oracle
     osquery
+    out
     pacman
     pagerduty
     pagerduty_util
     pam
+    panos
     parallels
     parted
     pcs
     pdbedit
     pecl
+    pf
     philips_hue
     pillar
     pip
@@ -321,6 +341,8 @@ execution modules
     ps
     publish
     puppet
+    purefa
+    purefb
     pushbullet
     pushover_notify
     pw_group
@@ -354,6 +376,7 @@ execution modules
     s3
     s6
     salt_proxy
+    saltcheck
     saltcloudmod
     saltutil
     schedule
@@ -395,10 +418,10 @@ execution modules
     state
     status
     statuspage
-    stormpath
     supervisord
     suse_apache
     svn
+    swarm
     swift
     sysbench
     sysfs
@@ -408,11 +431,13 @@ execution modules
     system
     system_profiler
     systemd
+    telegram
     telemetry
     temp
     test
     testinframod
     test_virtual
+    textfsm_mod
     timezone
     tls
     tomcat
@@ -425,6 +450,7 @@ execution modules
     uptime
     useradd
     uwsgi
+    vagrant
     varnish
     vault
     vbox_guest
@@ -432,6 +458,7 @@ execution modules
     victorops
     virt
     virtualenv_mod
+    vmctl
     vsphere
     win_autoruns
     win_certutil
@@ -464,7 +491,6 @@ execution modules
     win_system
     win_task
     win_timezone
-    win_update
     win_useradd
     win_wua
     x509
@@ -481,5 +507,6 @@ execution modules
     znc
     zoneadm
     zonecfg
+    zookeeper
     zpool
     zypper

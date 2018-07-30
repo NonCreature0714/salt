@@ -54,7 +54,7 @@ connection with the remote device only when required.
 New in 2016.11.0
 ----------------
 
-Proxy minions now support configuration files with names ending in '*.conf'
+Proxy minions now support configuration files with names ending in '\*.conf'
 and placed in /etc/salt/proxy.d.
 
 Proxy minions can now be configured in /etc/salt/proxy or /etc/salt/proxy.d
@@ -89,7 +89,7 @@ they are being loaded for the correct proxytype, example below:
         Only work on proxy
         '''
         try:
-            if salt.utils.is_proxy() and \
+            if salt.utils.platform.is_proxy() and \
                __opts__['proxy']['proxytype'] == 'ssh_sample':
                 return __virtualname__
         except KeyError:
@@ -156,20 +156,24 @@ will need to be restarted to pick up any changes.  A corresponding utility funct
 ``saltutil.sync_proxymodules``, has been added to sync these modules to minions.
 
 In addition, a salt.utils helper function called `is_proxy()` was added to make
-it easier to tell when the running minion is a proxy minion.
+it easier to tell when the running minion is a proxy minion. **NOTE: This
+function was renamed to salt.utils.platform.is_proxy() for the 2018.3.0
+release**
 
 New in 2015.8
 -------------
 
-Starting with the 2015.8 release of Salt, proxy processes are no longer forked off from a controlling minion.
-Instead, they have their own script ``salt-proxy`` which takes mostly the same arguments that the
-standard Salt minion does with the addition of ``--proxyid``.  This is the id that the salt-proxy will
-use to identify itself to the master.  Proxy configurations are still best kept in Pillar and their format
-has not changed.
+Starting with the 2015.8 release of Salt, proxy processes are no longer forked
+off from a controlling minion.  Instead, they have their own script
+``salt-proxy`` which takes mostly the same arguments that the standard Salt
+minion does with the addition of ``--proxyid``.  This is the id that the
+salt-proxy will use to identify itself to the master.  Proxy configurations are
+still best kept in Pillar and their format has not changed.
 
-This change allows for better process control and logging.  Proxy processes can now be listed with standard
-process management utilities (``ps`` from the command line).  Also, a full Salt minion is no longer
-required (though it is still strongly recommended) on machines hosting proxies.
+This change allows for better process control and logging.  Proxy processes can
+now be listed with standard process management utilities (``ps`` from the
+command line).  Also, a full Salt minion is no longer required (though it is
+still strongly recommended) on machines hosting proxies.
 
 
 Getting Started
@@ -383,8 +387,9 @@ Pre 2015.8 the proxymodule also must have an ``id()`` function.  2015.8 and foll
 this function because the proxy's id is required on the command line.
 
 Here is an example proxymodule used to interface to a *very* simple REST
-server.  Code for the server is in the `salt-contrib GitHub repository
-<https://github.com/saltstack/salt-contrib/tree/master/proxyminion_rest_example>`_
+server. Code for the server is in the `salt-contrib GitHub repository`_.
+
+.. _`salt-contrib GitHub repository`: https://github.com/saltstack/salt-contrib/tree/master/proxyminion_rest_example
 
 This proxymodule enables "service" enumeration, starting, stopping, restarting,
 and status; "package" installation, and a ping.
@@ -619,9 +624,10 @@ in the proxymodule itself.  This might be useful if a proxymodule author wants t
 all the code for the proxy interface in the same place instead of splitting it between
 the proxy and grains directories.
 
-This function will only be called automatically if the configuration variable ``proxy_merge_grains_in_module``
-is set to True in the proxy configuration file (default ``/etc/salt/proxy``).  This
-variable defaults to ``True`` in the release code-named *2017.7.0*.
+This function will only be called automatically if the configuration variable
+``proxy_merge_grains_in_module`` is set to True in the proxy configuration file
+(default ``/etc/salt/proxy``).  This variable defaults to ``True`` in the
+release code-named *2017.7.0*.
 
 
 .. code: python::
@@ -640,7 +646,7 @@ variable defaults to ``True`` in the release code-named *2017.7.0*.
 
     def __virtual__():
         try:
-            if salt.utils.is_proxy() and __opts__['proxy']['proxytype'] == 'rest_sample':
+            if salt.utils.platform.is_proxy() and __opts__['proxy']['proxytype'] == 'rest_sample':
                 return __virtualname__
         except KeyError:
             pass
@@ -708,7 +714,7 @@ Example from ``salt/grains/rest_sample.py``:
 
     def __virtual__():
         try:
-            if salt.utils.is_proxy() and __opts__['proxy']['proxytype'] == 'rest_sample':
+            if salt.utils.platform.is_proxy() and __opts__['proxy']['proxytype'] == 'rest_sample':
                 return __virtualname__
         except KeyError:
             pass
@@ -733,7 +739,7 @@ This sections specifically talks about the SSH proxy module and
 explains the working of the example proxy module ``ssh_sample``.
 
 Here is a simple example proxymodule used to interface to a device over SSH.
-Code for the SSH shell is in the `salt-contrib GitHub repository <https://github.com/saltstack/salt-contrib/proxyminion_ssh_example>`_
+Code for the SSH shell is in the `salt-contrib GitHub repository`_.
 
 This proxymodule enables "package" installation.
 
@@ -749,7 +755,7 @@ This proxymodule enables "package" installation.
     from __future__ import absolute_import
 
     # Import python libs
-    import json
+    import salt.utils.json
     import logging
 
     # Import Salt's libs
@@ -817,7 +823,7 @@ This proxymodule enables "package" installation.
                 jsonret.append(ln_)
             if '}' in ln_:
                 in_json = False
-        return json.loads('\n'.join(jsonret))
+        return salt.utils.json.loads('\n'.join(jsonret))
 
 
     def package_list():

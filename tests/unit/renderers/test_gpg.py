@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Import Python Libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import Salt Testing libs
 from tests.support.mixins import LoaderModuleMockMixin
@@ -32,10 +32,10 @@ class GPGTestCase(TestCase, LoaderModuleMockMixin):
         '''
         gpg_exec = '/bin/gpg'
 
-        with patch('salt.utils.which', MagicMock(return_value=gpg_exec)):
+        with patch('salt.utils.path.which', MagicMock(return_value=gpg_exec)):
             self.assertEqual(gpg._get_gpg_exec(), gpg_exec)
 
-        with patch('salt.utils.which', MagicMock(return_value=False)):
+        with patch('salt.utils.path.which', MagicMock(return_value=False)):
             self.assertRaises(SaltRenderError, gpg._get_gpg_exec)
 
     def test__decrypt_ciphertext(self):
@@ -44,7 +44,11 @@ class GPGTestCase(TestCase, LoaderModuleMockMixin):
         '''
         key_dir = '/etc/salt/gpgkeys'
         secret = 'Use more salt.'
-        crypted = '!@#$%^&*()_+'
+        crypted_long = '-----BEGIN PGP MESSAGE-----!@#$%^&*()_+-----END PGP MESSAGE-----'
+        crypted_short = '!@#$%^&*()_+'
+
+        multisecret = 'password is {0} and salt is {0}'.format(secret)
+        multicrypted = 'password is {0} and salt is {0}'.format(crypted_long)
 
         class GPGDecrypt(object):
             def communicate(self, *args, **kwargs):
@@ -55,19 +59,24 @@ class GPGTestCase(TestCase, LoaderModuleMockMixin):
                 return [None, 'decrypt error']
 
         with patch('salt.renderers.gpg._get_key_dir', MagicMock(return_value=key_dir)), \
-                patch('salt.utils.which', MagicMock()):
+                patch('salt.utils.path.which', MagicMock()):
             with patch('salt.renderers.gpg.Popen', MagicMock(return_value=GPGDecrypt())):
-                self.assertEqual(gpg._decrypt_ciphertext(crypted), secret)
+                self.assertEqual(gpg._decrypt_ciphertexts(crypted_short), secret)
+                self.assertEqual(gpg._decrypt_ciphertexts(crypted_long), secret)
+                self.assertEqual(
+                    gpg._decrypt_ciphertexts(multicrypted), multisecret)
             with patch('salt.renderers.gpg.Popen', MagicMock(return_value=GPGNotDecrypt())):
-                self.assertEqual(gpg._decrypt_ciphertext(crypted), crypted)
+                self.assertEqual(gpg._decrypt_ciphertexts(crypted_short), crypted_short)
+                self.assertEqual(gpg._decrypt_ciphertexts(crypted_long), crypted_long)
+                self.assertEqual(
+                    gpg._decrypt_ciphertexts(multicrypted), multicrypted)
 
     def test__decrypt_object(self):
         '''
         test _decrypt_object
         '''
-
         secret = 'Use more salt.'
-        crypted = '-----BEGIN PGP MESSAGE-----!@#$%^&*()_+'
+        crypted = '-----BEGIN PGP MESSAGE-----!@#$%^&*()_+-----END PGP MESSAGE-----'
 
         secret_map = {'secret': secret}
         crypted_map = {'secret': crypted}
@@ -86,7 +95,6 @@ class GPGTestCase(TestCase, LoaderModuleMockMixin):
         '''
         test render
         '''
-
         key_dir = '/etc/salt/gpgkeys'
         secret = 'Use more salt.'
         crypted = '-----BEGIN PGP MESSAGE-----!@#$%^&*()_+'

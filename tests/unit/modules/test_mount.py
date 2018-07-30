@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 '''
-    :codeauthor: :email:`Rupesh Tare <rupesht@saltstack.com>`
+    :codeauthor: Rupesh Tare <rupesht@saltstack.com>
 '''
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import os
+import textwrap
 
 # Import Salt Testing Libs
 from tests.support.mixins import LoaderModuleMockMixin
@@ -18,9 +19,10 @@ from tests.support.mock import (
 )
 
 # Import Salt Libs
-import salt.utils
-from salt.exceptions import CommandExecutionError
+import salt.utils.files
+import salt.utils.path
 import salt.modules.mount as mount
+from salt.exceptions import CommandExecutionError
 
 MOCK_SHELL_FILE = 'A B C D F G\n'
 
@@ -85,20 +87,19 @@ class MountTestCase(TestCase, LoaderModuleMockMixin):
         with patch.object(os.path, 'isfile', mock):
             self.assertEqual(mount.fstab(), {})
 
+        file_data = '\n'.join(['#', 'A B C D,E,F G H'])
         mock = MagicMock(return_value=True)
-        with patch.dict(mount.__grains__, {'kernel': ''}):
-            with patch.object(os.path, 'isfile', mock):
-                file_data = '\n'.join(['#',
-                                       'A B C D,E,F G H'])
-                with patch('salt.utils.fopen',
-                           mock_open(read_data=file_data),
-                           create=True) as m:
-                    m.return_value.__iter__.return_value = file_data.splitlines()
-                    self.assertEqual(mount.fstab(), {'B': {'device': 'A',
-                                                           'dump': 'G',
-                                                           'fstype': 'C',
-                                                           'opts': ['D', 'E', 'F'],
-                                                           'pass': 'H'}})
+        with patch.dict(mount.__grains__, {'kernel': ''}), \
+                patch.object(os.path, 'isfile', mock), \
+                patch('salt.utils.files.fopen', mock_open(read_data=file_data)):
+            fstab = mount.fstab()
+            assert fstab == {
+                'B': {'device': 'A',
+                      'dump': 'G',
+                      'fstype': 'C',
+                      'opts': ['D', 'E', 'F'],
+                      'pass': 'H'}
+            }, fstab
 
     def test_vfstab(self):
         '''
@@ -108,21 +109,23 @@ class MountTestCase(TestCase, LoaderModuleMockMixin):
         with patch.object(os.path, 'isfile', mock):
             self.assertEqual(mount.vfstab(), {})
 
+        file_data = textwrap.dedent('''\
+            #
+            swap        -   /tmp                tmpfs    -   yes    size=2048m
+            ''')
         mock = MagicMock(return_value=True)
-        with patch.dict(mount.__grains__, {'kernel': 'SunOS'}):
-            with patch.object(os.path, 'isfile', mock):
-                file_data = '\n'.join(['#',
-                                       'swap        -   /tmp                tmpfs    -   yes    size=2048m'])
-                with patch('salt.utils.fopen',
-                           mock_open(read_data=file_data),
-                           create=True) as m:
-                    m.return_value.__iter__.return_value = file_data.splitlines()
-                    self.assertEqual(mount.fstab(), {'/tmp': {'device': 'swap',
-                                                              'device_fsck': '-',
-                                                              'fstype': 'tmpfs',
-                                                              'mount_at_boot': 'yes',
-                                                              'opts': ['size=2048m'],
-                                                              'pass_fsck': '-'}})
+        with patch.dict(mount.__grains__, {'kernel': 'SunOS'}), \
+                patch.object(os.path, 'isfile', mock), \
+                patch('salt.utils.files.fopen', mock_open(read_data=file_data)):
+            vfstab = mount.vfstab()
+            assert vfstab == {
+                '/tmp': {'device': 'swap',
+                         'device_fsck': '-',
+                         'fstype': 'tmpfs',
+                         'mount_at_boot': 'yes',
+                         'opts': ['size=2048m'],
+                         'pass_fsck': '-'}
+            }, vfstab
 
     def test_rm_fstab(self):
         '''
@@ -131,7 +134,7 @@ class MountTestCase(TestCase, LoaderModuleMockMixin):
         mock_fstab = MagicMock(return_value={})
         with patch.dict(mount.__grains__, {'kernel': ''}):
             with patch.object(mount, 'fstab', mock_fstab):
-                with patch('salt.utils.fopen', mock_open()):
+                with patch('salt.utils.files.fopen', mock_open()):
                     self.assertTrue(mount.rm_fstab('name', 'device'))
 
     def test_set_fstab(self):
@@ -148,13 +151,13 @@ class MountTestCase(TestCase, LoaderModuleMockMixin):
         mock = MagicMock(return_value=True)
         mock_read = MagicMock(side_effect=OSError)
         with patch.object(os.path, 'isfile', mock):
-            with patch.object(salt.utils, 'fopen', mock_read):
+            with patch.object(salt.utils.files, 'fopen', mock_read):
                 self.assertRaises(CommandExecutionError,
                                   mount.set_fstab, 'A', 'B', 'C')
 
         mock = MagicMock(return_value=True)
         with patch.object(os.path, 'isfile', mock):
-            with patch('salt.utils.fopen',
+            with patch('salt.utils.files.fopen',
                        mock_open(read_data=MOCK_SHELL_FILE)):
                 self.assertEqual(mount.set_fstab('A', 'B', 'C'), 'new')
 
@@ -242,45 +245,66 @@ class MountTestCase(TestCase, LoaderModuleMockMixin):
         '''
         Returns true if the command passed is a fuse mountable application
         '''
-        with patch.object(salt.utils, 'which', return_value=None):
+        with patch.object(salt.utils.path, 'which', return_value=None):
             self.assertFalse(mount.is_fuse_exec('cmd'))
 
-        with patch.object(salt.utils, 'which', return_value=True):
-            self.assertFalse(mount.is_fuse_exec('cmd'))
-
-        mock = MagicMock(side_effect=[1, 0])
-        with patch.object(salt.utils, 'which', mock):
-            self.assertFalse(mount.is_fuse_exec('cmd'))
+        def _ldd_side_effect(cmd, *args, **kwargs):
+            '''
+            Neither of these are full ldd output, but what is_fuse_exec is
+            looking for is 'libfuse' in the ldd output, so these examples
+            should be sufficient enough to test both the True and False cases.
+            '''
+            return {
+                'ldd cmd1': textwrap.dedent('''\
+                    linux-vdso.so.1 (0x00007ffeaf5fb000)
+                    libfuse3.so.3 => /usr/lib/libfuse3.so.3 (0x00007f91e66ac000)
+                    '''),
+                'ldd cmd2': textwrap.dedent('''\
+                    linux-vdso.so.1 (0x00007ffeaf5fb000)
+                    ''')
+            }[cmd]
+        which_mock = MagicMock(side_effect=lambda x: x)
+        ldd_mock = MagicMock(side_effect=_ldd_side_effect)
+        with patch.object(salt.utils.path, 'which', which_mock):
+            with patch.dict(mount.__salt__, {'cmd.run': _ldd_side_effect}):
+                self.assertTrue(mount.is_fuse_exec('cmd1'))
+                self.assertFalse(mount.is_fuse_exec('cmd2'))
 
     def test_swaps(self):
         '''
         Return a dict containing information on active swap
         '''
 
-        file_data = '\n'.join(['Filename Type Size Used Priority',
-                               '/dev/sda1 partition 31249404 4100 -1'])
+        file_data = textwrap.dedent('''\
+            Filename Type Size Used Priority
+            /dev/sda1 partition 31249404 4100 -1
+            ''')
         with patch.dict(mount.__grains__, {'os': '', 'kernel': ''}):
-            with patch('salt.utils.fopen',
-                       mock_open(read_data=file_data),
-                       create=True) as m:
-                m.return_value.__iter__.return_value = file_data.splitlines()
+            with patch('salt.utils.files.fopen', mock_open(read_data=file_data)):
+                swaps = mount.swaps()
+                assert swaps == {
+                    '/dev/sda1': {
+                        'priority': '-1',
+                        'size': '31249404',
+                        'type': 'partition',
+                        'used': '4100'}
+                }, swaps
 
-                self.assertDictEqual(mount.swaps(), {'/dev/sda1':
-                                                     {'priority': '-1',
-                                                      'size': '31249404',
-                                                      'type': 'partition',
-                                                      'used': '4100'}})
-
-        file_data = '\n'.join(['Device Size Used Unknown Unknown Priority',
-                               '/dev/sda1 31249404 4100 unknown unknown -1'])
+        file_data = textwrap.dedent('''\
+            Device Size Used Unknown Unknown Priority
+            /dev/sda1 31249404 4100 unknown unknown -1
+            ''')
         mock = MagicMock(return_value=file_data)
-        with patch.dict(mount.__grains__, {'os': 'OpenBSD', 'kernel': 'OpenBSD'}):
-            with patch.dict(mount.__salt__, {'cmd.run_stdout': mock}):
-                self.assertDictEqual(mount.swaps(), {'/dev/sda1':
-                                                     {'priority': '-1',
-                                                      'size': '31249404',
-                                                      'type': 'partition',
-                                                      'used': '4100'}})
+        with patch.dict(mount.__grains__, {'os': 'OpenBSD', 'kernel': 'OpenBSD'}), \
+                patch.dict(mount.__salt__, {'cmd.run_stdout': mock}):
+            swaps = mount.swaps()
+            assert swaps == {
+                '/dev/sda1': {
+                    'priority': '-1',
+                    'size': '31249404',
+                    'type': 'partition',
+                    'used': '4100'}
+            }, swaps
 
     def test_swapon(self):
         '''

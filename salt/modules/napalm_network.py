@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
 NAPALM Network
-===============
+==============
 
 Basic methods for interaction with the network device through the virtual proxy 'napalm'.
 
@@ -19,17 +19,25 @@ Dependencies
 .. versionchanged:: 2017.7.0
 '''
 
-from __future__ import absolute_import
-
-# Import python lib
+# Import Python libs
+from __future__ import absolute_import, unicode_literals, print_function
 import logging
+
 log = logging.getLogger(__name__)
 
-# salt libs
-from salt.ext import six
-import salt.utils.templates
+# Import Salt libs
+import salt.utils.files
 import salt.utils.napalm
-from salt.utils.napalm import proxy_napalm_wrap
+import salt.utils.templates
+
+# Import 3rd-party libs
+from salt.ext import six
+try:
+    from salt.utils import fopen
+    from salt.utils import mkstemp
+except ImportError:
+    from salt.utils.files import fopen
+    from salt.utils.files import mkstemp
 
 # ----------------------------------------------------------------------------------------------------------------------
 # module properties
@@ -98,7 +106,7 @@ def _filter_dict(input_dict, search_key, search_value):
 
 def _explicit_close(napalm_device):
     '''
-    Will explicitely close the config session with the network device,
+    Will explicily close the config session with the network device,
     when running in a now-always-alive proxy minion or regular minion.
     This helper must be used in configuration-related functions,
     as the session is preserved and not closed before making any changes.
@@ -136,7 +144,7 @@ def _config_logic(napalm_device,
     # then the decorator will make sure that
     # if not proxy (when the connection is always alive)
     # and the `inherit_napalm_device` is set,
-    # `napalm_device` will be overriden.
+    # `napalm_device` will be overridden.
     # See `salt.utils.napalm.proxy_napalm_wrap` decorator.
 
     loaded_result['already_configured'] = False
@@ -153,6 +161,7 @@ def _config_logic(napalm_device,
         loaded_result['diff'] = None
         loaded_result['result'] = False
         loaded_result['comment'] = _compare.get('comment')
+        __context__['retcode'] = 1
         return loaded_result
 
     _loaded_res = loaded_result.get('result', False)
@@ -172,12 +181,15 @@ def _config_logic(napalm_device,
             # make sure it notifies
             # that something went wrong
             _explicit_close(napalm_device)
+            __context__['retcode'] = 1
             return loaded_result
 
         loaded_result['comment'] += 'Configuration discarded.'
         # loaded_result['result'] = False not necessary
         # as the result can be true when test=True
         _explicit_close(napalm_device)
+        if not loaded_result['result']:
+            __context__['retcode'] = 1
         return loaded_result
 
     if not test and commit_config:
@@ -208,10 +220,13 @@ def _config_logic(napalm_device,
                 loaded_result['result'] = False
                 # notify if anything goes wrong
                 _explicit_close(napalm_device)
+                __context__['retcode'] = 1
                 return loaded_result
             loaded_result['already_configured'] = True
             loaded_result['comment'] = 'Already configured.'
     _explicit_close(napalm_device)
+    if not loaded_result['result']:
+        __context__['retcode'] = 1
     return loaded_result
 
 
@@ -220,8 +235,8 @@ def _config_logic(napalm_device,
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-@proxy_napalm_wrap
-def connected(**kwarvs):  # pylint: disable=unused-argument
+@salt.utils.napalm.proxy_napalm_wrap
+def connected(**kwargs):  # pylint: disable=unused-argument
     '''
     Specifies if the connection to the device succeeded.
 
@@ -237,7 +252,7 @@ def connected(**kwarvs):  # pylint: disable=unused-argument
     }
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def facts(**kwargs):  # pylint: disable=unused-argument
     '''
     Returns characteristics of the network device.
@@ -263,7 +278,7 @@ def facts(**kwargs):  # pylint: disable=unused-argument
     .. code-block:: python
 
         {
-            'os_version': u'13.3R6.5',
+            'os_version': '13.3R6.5',
             'uptime': 10117140,
             'interface_list': [
                 'lc-0/0/0',
@@ -276,11 +291,11 @@ def facts(**kwargs):  # pylint: disable=unused-argument
                 'gr-0/0/10',
                 'ip-0/0/10'
             ],
-            'vendor': u'Juniper',
-            'serial_number': u'JN131356FBFA',
-            'model': u'MX480',
-            'hostname': u're0.edge05.syd01',
-            'fqdn': u're0.edge05.syd01'
+            'vendor': 'Juniper',
+            'serial_number': 'JN131356FBFA',
+            'model': 'MX480',
+            'hostname': 're0.edge05.syd01',
+            'fqdn': 're0.edge05.syd01'
         }
     '''
 
@@ -292,7 +307,7 @@ def facts(**kwargs):  # pylint: disable=unused-argument
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def environment(**kwargs):  # pylint: disable=unused-argument
     '''
     Returns the environment of the device.
@@ -359,14 +374,129 @@ def environment(**kwargs):  # pylint: disable=unused-argument
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def cli(*commands, **kwargs):  # pylint: disable=unused-argument
-
     '''
     Returns a dictionary with the raw output of all commands passed as arguments.
 
-    :param commands: list of commands to be executed on the device
-    :return: a dictionary with the mapping between each command and its raw output
+    commands
+        List of commands to be executed on the device.
+
+    textfsm_parse: ``False``
+        Try parsing the outputs using the TextFSM templates.
+
+        .. versionadded:: 2018.3.0
+
+        .. note::
+            This option can be also specified in the minion configuration
+            file or pillar as ``napalm_cli_textfsm_parse``.
+
+    textfsm_path
+        The path where the TextFSM templates can be found. This option implies
+        the usage of the TextFSM index file.
+        ``textfsm_path`` can be either absolute path on the server,
+        either specified using the following URL mschemes: ``file://``,
+        ``salt://``, ``http://``, ``https://``, ``ftp://``,
+        ``s3://``, ``swift://``.
+
+        .. versionadded:: 2018.3.0
+
+        .. note::
+            This needs to be a directory with a flat structure, having an
+            index file (whose name can be specified using the ``index_file`` option)
+            and a number of TextFSM templates.
+
+        .. note::
+            This option can be also specified in the minion configuration
+            file or pillar as ``textfsm_path``.
+
+    textfsm_template
+        The path to a certain the TextFSM template.
+        This can be specified using the absolute path
+        to the file, or using one of the following URL schemes:
+
+        - ``salt://``, to fetch the template from the Salt fileserver.
+        - ``http://`` or ``https://``
+        - ``ftp://``
+        - ``s3://``
+        - ``swift://``
+
+        .. versionadded:: 2018.3.0
+
+    textfsm_template_dict
+        A dictionary with the mapping between a command
+        and the corresponding TextFSM path to use to extract the data.
+        The TextFSM paths can be specified as in ``textfsm_template``.
+
+        .. versionadded:: 2018.3.0
+
+        .. note::
+            This option can be also specified in the minion configuration
+            file or pillar as ``napalm_cli_textfsm_template_dict``.
+
+    platform_grain_name: ``os``
+        The name of the grain used to identify the platform name
+        in the TextFSM index file. Default: ``os``.
+
+        .. versionadded:: 2018.3.0
+
+        .. note::
+            This option can be also specified in the minion configuration
+            file or pillar as ``textfsm_platform_grain``.
+
+    platform_column_name: ``Platform``
+        The column name used to identify the platform,
+        exactly as specified in the TextFSM index file.
+        Default: ``Platform``.
+
+        .. versionadded:: 2018.3.0
+
+        .. note::
+            This is field is case sensitive, make sure
+            to assign the correct value to this option,
+            exactly as defined in the index file.
+
+        .. note::
+            This option can be also specified in the minion configuration
+            file or pillar as ``textfsm_platform_column_name``.
+
+    index_file: ``index``
+        The name of the TextFSM index file, under the ``textfsm_path``. Default: ``index``.
+
+        .. versionadded:: 2018.3.0
+
+        .. note::
+            This option can be also specified in the minion configuration
+            file or pillar as ``textfsm_index_file``.
+
+    saltenv: ``base``
+        Salt fileserver envrionment from which to retrieve the file.
+        Ignored if ``textfsm_path`` is not a ``salt://`` URL.
+
+        .. versionadded:: 2018.3.0
+
+    include_empty: ``False``
+        Include empty files under the ``textfsm_path``.
+
+        .. versionadded:: 2018.3.0
+
+    include_pat
+        Glob or regex to narrow down the files cached from the given path.
+        If matching with a regex, the regex must be prefixed with ``E@``,
+        otherwise the expression will be interpreted as a glob.
+
+        .. versionadded:: 2018.3.0
+
+    exclude_pat
+        Glob or regex to exclude certain files from being cached from the given path.
+        If matching with a regex, the regex must be prefixed with ``E@``,
+        otherwise the expression will be interpreted as a glob.
+
+        .. versionadded:: 2018.3.0
+
+        .. note::
+            If used with ``include_pat``, files matching this pattern will be
+            excluded from the subset of files defined by ``include_pat``.
 
     CLI Example:
 
@@ -374,19 +504,25 @@ def cli(*commands, **kwargs):  # pylint: disable=unused-argument
 
         salt '*' net.cli "show version" "show chassis fan"
 
+    CLI Example with TextFSM template:
+
+    .. code-block:: bash
+
+        salt '*' net.cli textfsm_parse=True textfsm_path=salt://textfsm/
+
     Example output:
 
     .. code-block:: python
 
         {
-            u'show version and haiku':  u'Hostname: re0.edge01.arn01
+            'show version and haiku':  'Hostname: re0.edge01.arn01
                                           Model: mx480
                                           Junos: 13.3R6.5
                                             Help me, Obi-Wan
                                             I just saw Episode Two
                                             You're my only hope
                                          ',
-            u'show chassis fan' :   u'Item                      Status   RPM     Measurement
+            'show chassis fan' :   'Item                      Status   RPM     Measurement
                                       Top Rear Fan              OK       3840    Spinning at intermediate-speed
                                       Bottom Rear Fan           OK       3840    Spinning at intermediate-speed
                                       Top Middle Fan            OK       3900    Spinning at intermediate-speed
@@ -395,9 +531,31 @@ def cli(*commands, **kwargs):  # pylint: disable=unused-argument
                                       Bottom Front Fan          OK       3840    Spinning at intermediate-speed
                                      '
         }
-    '''
 
-    return salt.utils.napalm.call(
+    Example output with TextFSM parsing:
+
+    .. code-block:: json
+
+        {
+          "comment": "",
+          "result": true,
+          "out": {
+            "sh ver": [
+              {
+                "kernel": "9.1S3.5",
+                "documentation": "9.1S3.5",
+                "boot": "9.1S3.5",
+                "crypto": "9.1S3.5",
+                "chassis": "",
+                "routing": "9.1S3.5",
+                "base": "9.1S3.5",
+                "model": "mx960"
+              }
+            ]
+          }
+        }
+    '''
+    raw_cli_outputs = salt.utils.napalm.call(
         napalm_device,  # pylint: disable=undefined-variable
         'cli',
         **{
@@ -406,9 +564,112 @@ def cli(*commands, **kwargs):  # pylint: disable=unused-argument
     )
     # thus we can display the output as is
     # in case of errors, they'll be catched in the proxy
+    if not raw_cli_outputs['result']:
+        # Error -> dispaly the output as-is.
+        return raw_cli_outputs
+    textfsm_parse = kwargs.get('textfsm_parse') or __opts__.get('napalm_cli_textfsm_parse') or\
+                    __pillar__.get('napalm_cli_textfsm_parse', False)
+    if not textfsm_parse:
+        # No TextFSM parsing required, return raw commands.
+        log.debug('No TextFSM parsing requested.')
+        return raw_cli_outputs
+    if 'textfsm.extract' not in __salt__ or 'textfsm.index' not in __salt__:
+        raw_cli_outputs['comment'] += 'Unable to process: is TextFSM installed?'
+        log.error(raw_cli_outputs['comment'])
+        return raw_cli_outputs
+    textfsm_template = kwargs.get('textfsm_template')
+    log.debug('textfsm_template: %s', textfsm_template)
+    textfsm_path = kwargs.get('textfsm_path') or __opts__.get('textfsm_path') or\
+                   __pillar__.get('textfsm_path')
+    log.debug('textfsm_path: %s', textfsm_path)
+    textfsm_template_dict = kwargs.get('textfsm_template_dict') or __opts__.get('napalm_cli_textfsm_template_dict') or\
+                            __pillar__.get('napalm_cli_textfsm_template_dict', {})
+    log.debug('TextFSM command-template mapping: %s', textfsm_template_dict)
+    index_file = kwargs.get('index_file') or __opts__.get('textfsm_index_file') or\
+                 __pillar__.get('textfsm_index_file')
+    log.debug('index_file: %s', index_file)
+    platform_grain_name = kwargs.get('platform_grain_name') or __opts__.get('textfsm_platform_grain') or\
+                          __pillar__.get('textfsm_platform_grain', 'os')
+    log.debug('platform_grain_name: %s', platform_grain_name)
+    platform_column_name = kwargs.get('platform_column_name') or __opts__.get('textfsm_platform_column_name') or\
+                           __pillar__.get('textfsm_platform_column_name', 'Platform')
+    log.debug('platform_column_name: %s', platform_column_name)
+    saltenv = kwargs.get('saltenv', 'base')
+    include_empty = kwargs.get('include_empty', False)
+    include_pat = kwargs.get('include_pat')
+    exclude_pat = kwargs.get('exclude_pat')
+    processed_cli_outputs = {
+        'comment': raw_cli_outputs.get('comment', ''),
+        'result': raw_cli_outputs['result'],
+        'out': {}
+    }
+    log.debug('Starting to analyse the raw outputs')
+    for command in list(commands):
+        command_output = raw_cli_outputs['out'][command]
+        log.debug('Output from command: %s', command)
+        log.debug(command_output)
+        processed_command_output = None
+        if textfsm_path:
+            log.debug('Using the templates under %s', textfsm_path)
+            processed_cli_output = __salt__['textfsm.index'](command,
+                                                             platform_grain_name=platform_grain_name,
+                                                             platform_column_name=platform_column_name,
+                                                             output=command_output.strip(),
+                                                             textfsm_path=textfsm_path,
+                                                             saltenv=saltenv,
+                                                             include_empty=include_empty,
+                                                             include_pat=include_pat,
+                                                             exclude_pat=exclude_pat)
+            log.debug('Processed CLI output:')
+            log.debug(processed_cli_output)
+            if not processed_cli_output['result']:
+                log.debug('Apparently this didnt work, returnin the raw output')
+                processed_command_output = command_output
+                processed_cli_outputs['comment'] += '\nUnable to process the output from {0}: {1}.'.format(command,
+                    processed_cli_output['comment'])
+                log.error(processed_cli_outputs['comment'])
+            elif processed_cli_output['out']:
+                log.debug('All good, %s has a nice output!', command)
+                processed_command_output = processed_cli_output['out']
+            else:
+                comment = '''\nProcessing "{}" didn't fail, but didn't return anything either. Dumping raw.'''.format(
+                    command)
+                processed_cli_outputs['comment'] += comment
+                log.error(comment)
+                processed_command_output = command_output
+        elif textfsm_template or command in textfsm_template_dict:
+            if command in textfsm_template_dict:
+                textfsm_template = textfsm_template_dict[command]
+            log.debug('Using %s to process the command: %s', textfsm_template, command)
+            processed_cli_output = __salt__['textfsm.extract'](textfsm_template,
+                                                               raw_text=command_output,
+                                                               saltenv=saltenv)
+            log.debug('Processed CLI output:')
+            log.debug(processed_cli_output)
+            if not processed_cli_output['result']:
+                log.debug('Apparently this didnt work, returning '
+                          'the raw output')
+                processed_command_output = command_output
+                processed_cli_outputs['comment'] += '\nUnable to process the output from {0}: {1}'.format(command,
+                    processed_cli_output['comment'])
+                log.error(processed_cli_outputs['comment'])
+            elif processed_cli_output['out']:
+                log.debug('All good, %s has a nice output!', command)
+                processed_command_output = processed_cli_output['out']
+            else:
+                log.debug('Processing %s didnt fail, but didnt return'
+                          ' anything either. Dumping raw.', command)
+                processed_command_output = command_output
+        else:
+            log.error('No TextFSM template specified, or no TextFSM path defined')
+            processed_command_output = command_output
+            processed_cli_outputs['comment'] += '\nUnable to process the output from {}.'.format(command)
+        processed_cli_outputs['out'][command] = processed_command_output
+    processed_cli_outputs['comment'] = processed_cli_outputs['comment'].strip()
+    return processed_cli_outputs
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def traceroute(destination, source=None, ttl=None, timeout=None, vrf=None, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -453,7 +714,7 @@ def traceroute(destination, source=None, ttl=None, timeout=None, vrf=None, **kwa
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def ping(destination, source=None, ttl=None, timeout=None, size=None, count=None, vrf=None, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -506,7 +767,7 @@ def ping(destination, source=None, ttl=None, timeout=None, size=None, count=None
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def arp(interface='', ipaddr='', macaddr='', **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -572,18 +833,18 @@ def arp(interface='', ipaddr='', macaddr='', **kwargs):  # pylint: disable=unuse
     return proxy_output
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def ipaddrs(**kwargs):  # pylint: disable=unused-argument
 
     '''
     Returns IP addresses configured on the device.
 
-
-    :return:   A dictionary with the IPv4 and IPv6 addresses of the interfaces.\
-    Returns all configured IP addresses on all interfaces as a dictionary of dictionaries.\
-    Keys of the main dictionary represent the name of the interface.\
-    Values of the main dictionary represent are dictionaries that may consist of two keys\
-    'ipv4' and 'ipv6' (one, both or none) which are themselvs dictionaries with the IP addresses as keys.\
+    :return:   A dictionary with the IPv4 and IPv6 addresses of the interfaces.
+        Returns all configured IP addresses on all interfaces as a dictionary
+        of dictionaries.  Keys of the main dictionary represent the name of the
+        interface.  Values of the main dictionary represent are dictionaries
+        that may consist of two keys 'ipv4' and 'ipv6' (one, both or none)
+        which are themselvs dictionaries with the IP addresses as keys.
 
     CLI Example:
 
@@ -596,28 +857,28 @@ def ipaddrs(**kwargs):  # pylint: disable=unused-argument
     .. code-block:: python
 
         {
-            u'FastEthernet8': {
-                u'ipv4': {
-                    u'10.66.43.169': {
+            'FastEthernet8': {
+                'ipv4': {
+                    '10.66.43.169': {
                         'prefix_length': 22
                     }
                 }
             },
-            u'Loopback555': {
-                u'ipv4': {
-                    u'192.168.1.1': {
+            'Loopback555': {
+                'ipv4': {
+                    '192.168.1.1': {
                         'prefix_length': 24
                     }
                 },
-                u'ipv6': {
-                    u'1::1': {
+                'ipv6': {
+                    '1::1': {
                         'prefix_length': 64
                     },
-                    u'2001:DB8:1::1': {
+                    '2001:DB8:1::1': {
                         'prefix_length': 64
                     },
-                    u'FE80::3': {
-                        'prefix_length': u'N/A'
+                    'FE80::3': {
+                        'prefix_length': 'N/A'
                     }
                 }
             }
@@ -632,14 +893,14 @@ def ipaddrs(**kwargs):  # pylint: disable=unused-argument
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def interfaces(**kwargs):  # pylint: disable=unused-argument
 
     '''
     Returns details of the interfaces on the device.
 
-    :return: Returns a dictionary of dictionaries. \
-    The keys for the first dictionary will be the interfaces in the devices.
+    :return: Returns a dictionary of dictionaries. The keys for the first
+        dictionary will be the interfaces in the devices.
 
     CLI Example:
 
@@ -652,21 +913,21 @@ def interfaces(**kwargs):  # pylint: disable=unused-argument
     .. code-block:: python
 
         {
-            u'Management1': {
+            'Management1': {
                 'is_up': False,
                 'is_enabled': False,
-                'description': u'',
+                'description': '',
                 'last_flapped': -1,
                 'speed': 1000,
-                'mac_address': u'dead:beef:dead',
+                'mac_address': 'dead:beef:dead',
             },
-            u'Ethernet1':{
+            'Ethernet1':{
                 'is_up': True,
                 'is_enabled': True,
-                'description': u'foo',
+                'description': 'foo',
                 'last_flapped': 1429978575.1554043,
                 'speed': 1000,
-                'mac_address': u'beef:dead:beef',
+                'mac_address': 'beef:dead:beef',
             }
         }
     '''
@@ -679,15 +940,16 @@ def interfaces(**kwargs):  # pylint: disable=unused-argument
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def lldp(interface='', **kwargs):  # pylint: disable=unused-argument
 
     '''
     Returns a detailed view of the LLDP neighbors.
 
     :param interface: interface name to filter on
-    :return:          A dictionary with the LLDL neighbors.\
-    The keys are the interfaces with LLDP activated on.
+
+    :return:          A dictionary with the LLDL neighbors. The keys are the
+        interfaces with LLDP activated on.
 
     CLI Example:
 
@@ -703,17 +965,17 @@ def lldp(interface='', **kwargs):  # pylint: disable=unused-argument
         {
             'TenGigE0/0/0/8': [
                 {
-                    'parent_interface': u'Bundle-Ether8',
-                    'interface_description': u'TenGigE0/0/0/8',
-                    'remote_chassis_id': u'8c60.4f69.e96c',
-                    'remote_system_name': u'switch',
-                    'remote_port': u'Eth2/2/1',
-                    'remote_port_description': u'Ethernet2/2/1',
-                    'remote_system_description': u'Cisco Nexus Operating System (NX-OS) Software 7.1(0)N1(1a)
+                    'parent_interface': 'Bundle-Ether8',
+                    'interface_description': 'TenGigE0/0/0/8',
+                    'remote_chassis_id': '8c60.4f69.e96c',
+                    'remote_system_name': 'switch',
+                    'remote_port': 'Eth2/2/1',
+                    'remote_port_description': 'Ethernet2/2/1',
+                    'remote_system_description': 'Cisco Nexus Operating System (NX-OS) Software 7.1(0)N1(1a)
                           TAC support: http://www.cisco.com/tac
                           Copyright (c) 2002-2015, Cisco Systems, Inc. All rights reserved.',
-                    'remote_system_capab': u'B, R',
-                    'remote_system_enable_capab': u'B'
+                    'remote_system_capab': 'B, R',
+                    'remote_system_enable_capab': 'B'
                 }
             ]
         }
@@ -741,7 +1003,7 @@ def lldp(interface='', **kwargs):  # pylint: disable=unused-argument
     return proxy_output
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def mac(address='', interface='', vlan=0, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -814,24 +1076,23 @@ def mac(address='', interface='', vlan=0, **kwargs):  # pylint: disable=unused-a
     return proxy_output
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def config(source=None, **kwargs):  # pylint: disable=unused-argument
     '''
     .. versionadded:: 2017.7.0
 
-    Return the whole configuration of the network device.
-    By default, it will return all possible configuration
-    sources supported by the network device.
+    Return the whole configuration of the network device. By default, it will
+    return all possible configuration sources supported by the network device.
     At most, there will be:
 
     - running config
     - startup config
     - candidate config
 
-    To return only one of the configurations, you can use
-    the ``source`` argument.
+    To return only one of the configurations, you can use the ``source``
+    argument.
 
-    source (optional)
+    source
         Which configuration type you want to display, default is all of them.
 
         Options:
@@ -845,10 +1106,10 @@ def config(source=None, **kwargs):  # pylint: disable=unused-argument
 
         - running (string): Representation of the native running configuration.
         - candidate (string): Representation of the native candidate configuration.
-            If the device doesnt differentiate between running and startup
+            If the device doesn't differentiate between running and startup
             configuration this will an empty string.
         - startup (string): Representation of the native startup configuration.
-            If the device doesnt differentiate between running and startup
+            If the device doesn't differentiate between running and startup
             configuration this will an empty string.
 
     CLI Example:
@@ -867,7 +1128,7 @@ def config(source=None, **kwargs):  # pylint: disable=unused-argument
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def optics(**kwargs):  # pylint: disable=unused-argument
     '''
     .. versionadded:: 2017.7.0
@@ -917,7 +1178,7 @@ def optics(**kwargs):  # pylint: disable=unused-argument
 # ----- Configuration specific functions ------------------------------------------------------------------------------>
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def load_config(filename=None,
                 text=None,
                 test=False,
@@ -925,6 +1186,7 @@ def load_config(filename=None,
                 debug=False,
                 replace=False,
                 inherit_napalm_device=None,
+                saltenv='base',
                 **kwargs):  # pylint: disable=unused-argument
     '''
     Applies configuration changes on the device. It can be loaded from a file or from inline string.
@@ -940,10 +1202,21 @@ def load_config(filename=None,
     To replace the config, set ``replace`` to ``True``.
 
     filename
-        Path to the file containing the desired configuration. By default is None.
+        Path to the file containing the desired configuration.
+        This can be specified using the absolute path to the file,
+        or using one of the following URL schemes:
+
+        - ``salt://``, to fetch the template from the Salt fileserver.
+        - ``http://`` or ``https://``
+        - ``ftp://``
+        - ``s3://``
+        - ``swift://``
+
+        .. versionchanged:: 2018.3.0
 
     text
         String containing the desired configuration.
+        This argument is ignored when ``filename`` is specified.
 
     test: False
         Dry run? If set as ``True``, will apply the config, discard and return the changes. Default: ``False``
@@ -962,6 +1235,11 @@ def load_config(filename=None,
         Load and replace the configuration. Default: ``False``.
 
         .. versionadded:: 2016.11.2
+
+    saltenv: ``base``
+        Specifies the Salt environment name.
+
+        .. versionadded:: 2018.3.0
 
     :return: a dictionary having the following keys:
 
@@ -985,6 +1263,7 @@ def load_config(filename=None,
     Example output:
 
     .. code-block:: python
+
         {
             'comment': 'Configuration discarded.',
             'already_configured': False,
@@ -992,7 +1271,6 @@ def load_config(filename=None,
             'diff': '[edit interfaces xe-0/0/5]+   description "Adding a description";'
         }
     '''
-
     fun = 'load_merge_candidate'
     if replace:
         fun = 'load_replace_candidate'
@@ -1005,19 +1283,30 @@ def load_config(filename=None,
         # compare_config, discard / commit
         # which have to be over the same session
         napalm_device['CLOSE'] = False  # pylint: disable=undefined-variable
+    if filename:
+        text = __salt__['cp.get_file_str'](filename, saltenv=saltenv)
+        if text is False:
+            # When using salt:// or https://, if the resource is not available,
+            #   it will either raise an exception, or return False.
+            ret = {
+                'result': False,
+                'out': None
+            }
+            ret['comment'] = 'Unable to read from {}. Please specify a valid file or text.'.format(filename)
+            log.error(ret['comment'])
+            return ret
     _loaded = salt.utils.napalm.call(
         napalm_device,  # pylint: disable=undefined-variable
         fun,
         **{
-            'filename': filename,
             'config': text
         }
     )
     loaded_config = None
     if debug:
         if filename:
-            with salt.utils.fopen(filename) as rfh:
-                loaded_config = rfh.read()
+            with salt.utils.files.fopen(filename) as rfh:
+                loaded_config = salt.utils.stringutils.to_unicode(rfh.read())
         else:
             loaded_config = text
     return _config_logic(napalm_device,  # pylint: disable=undefined-variable
@@ -1027,15 +1316,15 @@ def load_config(filename=None,
                          loaded_config=loaded_config)
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def load_template(template_name,
                   template_source=None,
-                  template_path=None,
                   template_hash=None,
                   template_hash_name=None,
                   template_user='root',
                   template_group='root',
                   template_mode='755',
+                  template_attrs='--------------e----',
                   saltenv=None,
                   template_engine='jinja',
                   skip_verify=False,
@@ -1094,13 +1383,6 @@ def load_template(template_name,
     template_source: None
         Inline config template to be rendered and loaded on the device.
 
-    template_path: None
-        Required only in case the argument ``template_name`` provides only the file basename
-        when referencing a local template using the absolute path.
-        E.g.: if ``template_name`` is specified as ``my_template.jinja``,
-        in order to find the template, this argument must be provided:
-        ``template_path: /absolute/path/to/``.
-
     template_hash: None
         Hash of the template file. Format: ``{hash_type: 'md5', 'hsum': <md5sum>}``
 
@@ -1122,10 +1404,15 @@ def load_template(template_name,
 
         .. versionadded:: 2016.11.2
 
-    template_user: 755
+    template_mode: 755
         Permissions of file.
 
         .. versionadded:: 2016.11.2
+
+    template_attrs: "--------------e----"
+        attributes of file. (see `man lsattr`)
+
+        .. versionadded:: 2018.3.0
 
     saltenv: base
         Specifies the template environment.
@@ -1176,26 +1463,26 @@ def load_template(template_name,
 
         .. versionadded:: 2016.11.2
 
-    **template_vars
+    template_vars
         Dictionary with the arguments/context to be used when the template is rendered.
 
         .. note::
 
-            Do not explicitly specify this argument.
-            This represents any other variable that will be sent
-            to the template rendering system.
+            Do not explicitly specify this argument. This represents any other
+            variable that will be sent to the template rendering system.
             Please see the examples below!
 
     :return: a dictionary having the following keys:
 
-    * result (bool): if the config was applied successfully. It is ``False`` only in case of failure. In case \
-    there are no changes to be applied and successfully performs all operations it is still ``True`` and so will be \
-    the ``already_configured`` flag (example below)
-    * comment (str): a message for the user
-    * already_configured (bool): flag to check if there were no changes applied
-    * loaded_config (str): the configuration loaded on the device, after rendering the template. Requires ``debug`` \
-    to be set as ``True``
-    * diff (str): returns the config changes applied
+    - result (bool): if the config was applied successfully. It is ``False``
+      only in case of failure. In case there are no changes to be applied and
+      successfully performs all operations it is still ``True`` and so will be
+      the ``already_configured`` flag (example below)
+    - comment (str): a message for the user
+    - already_configured (bool): flag to check if there were no changes applied
+    - loaded_config (str): the configuration loaded on the device, after
+      rendering the template. Requires ``debug`` to be set as ``True``
+    - diff (str): returns the config changes applied
 
     The template can use variables from the ``grains``, ``pillar`` or ``opts``, for example:
 
@@ -1231,15 +1518,15 @@ def load_template(template_name,
         # inline template using pillar data:
         salt -G 'os:junos' net.load_template set_hostname template_source='system { host-name {{pillar.proxy.host}}; }'
 
-        salt '*' net.load_template my_template template_path='/tmp/tpl/' my_param='aaa'  # will commit
-        salt '*' net.load_template my_template template_path='/tmp/tpl/' my_param='aaa' test=True  # dry run
+        salt '*' net.load_template my_template my_param='aaa'  # will commit
+        salt '*' net.load_template my_template my_param='aaa' test=True  # dry run
 
         salt '*' net.load_template salt://templates/my_stuff.jinja debug=True  # equivalent of the next command
-        salt '*' net.load_template my_stuff.jinja template_path=salt://templates/ debug=True
+        salt '*' net.load_template my_stuff.jinja debug=True
 
         # in case the template needs to include files that are not under the same path (e.g. http://),
         # to help the templating engine find it, you will need to specify the `saltenv` argument:
-        salt '*' net.load_template my_stuff.jinja template_path=salt://templates saltenv=/path/to/includes debug=True
+        salt '*' net.load_template my_stuff.jinja saltenv=/path/to/includes debug=True
 
         # render a mako template:
         salt '*' net.load_template salt://templates/my_stuff.mako template_engine=mako debug=True
@@ -1267,7 +1554,6 @@ def load_template(template_name,
         'out': None
     }
     loaded_config = None
-
     # prechecks
     if template_engine not in salt.utils.templates.TEMPLATE_REGISTRY:
         _loaded.update({
@@ -1283,11 +1569,10 @@ def load_template(template_name,
     salt_render = False
     for salt_render_prefix in salt_render_prefixes:
         if not salt_render:
-            salt_render = salt_render or template_name.startswith(salt_render_prefix) or \
-                          (template_path and template_path.startswith(salt_render_prefix))
+            salt_render = salt_render or template_name.startswith(salt_render_prefix)
     file_exists = __salt__['file.file_exists'](template_name)
 
-    if template_source or template_path or file_exists or salt_render:
+    if template_source or file_exists or salt_render:
         # either inline template
         # either template in a custom path
         # either abs path send
@@ -1298,7 +1583,7 @@ def load_template(template_name,
         if template_source:
             # render the content
             if not saltenv:
-                saltenv = template_path if template_path else 'base'  # either use the env from the path, either base
+                saltenv = 'base'
             _rendered = __salt__['file.apply_template_on_contents'](
                 contents=template_source,
                 template=template_engine,
@@ -1317,16 +1602,15 @@ def load_template(template_name,
                     _loaded['comment'] = 'Error while rendering the template.'
                 return _loaded
         else:
-            if template_path and not file_exists:
-                template_name = __salt__['file.join'](template_path, template_name)
-                if not saltenv:
-                    # no saltenv overridden
-                    # use the custom template path
-                    saltenv = template_path if not salt_render else 'base'
+            if not file_exists and not saltenv:
+                # no saltenv overridden
+                # use the custom template path
+                saltenv = 'base'
             elif salt_render and not saltenv:
-                # if saltenv not overrided and path specified as salt:// or http:// etc.
+                # if saltenv not overridden and path specified as salt:// or http:// etc.
                 # will use the default environment, from the base
-                saltenv = template_path if template_path else 'base'
+                saltenv = 'base'
+
             if not saltenv:
                 # still not specified, default to `base`
                 saltenv = 'base'
@@ -1340,6 +1624,7 @@ def load_template(template_name,
                                                     user=template_user,
                                                     group=template_group,
                                                     mode=template_mode,
+                                                    attrs=template_attrs,
                                                     template=template_engine,
                                                     context=template_vars,
                                                     defaults=defaults,
@@ -1361,8 +1646,8 @@ def load_template(template_name,
                     _loaded['result'] = False
                     _loaded['comment'] = 'Error while rendering the template.'
                     return _loaded
-                with salt.utils.fopen(_temp_tpl_file) as rfh:
-                    _rendered = rfh.read()
+                with salt.utils.files.fopen(_temp_tpl_file) as rfh:
+                    _rendered = salt.utils.stringutils.to_unicode(rfh.read())
                 __salt__['file.remove'](_temp_tpl_file)
             else:
                 return _loaded  # exit
@@ -1398,7 +1683,6 @@ def load_template(template_name,
             {
                 'template_name': template_name,
                 'template_source': template_source,  # inline template
-                'template_path': template_path,
                 'pillar': __pillar__,  # inject pillar content
                 'grains': __grains__,  # inject grains content
                 'opts': __opts__  # inject opts content
@@ -1412,7 +1696,7 @@ def load_template(template_name,
             # after running the other features:
             # compare_config, discard / commit
             # which have to be over the same session
-            # so we'll set the CLOSE global explicitely as False
+            # so we'll set the CLOSE global explicitly as False
             napalm_device['CLOSE'] = False  # pylint: disable=undefined-variable
         _loaded = salt.utils.napalm.call(
             napalm_device,  # pylint: disable=undefined-variable
@@ -1426,7 +1710,7 @@ def load_template(template_name,
                          loaded_config=loaded_config)
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def commit(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -1446,7 +1730,7 @@ def commit(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-argu
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def discard_config(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-argument
 
     """
@@ -1466,7 +1750,7 @@ def discard_config(inherit_napalm_device=None, **kwargs):  # pylint: disable=unu
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def compare_config(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -1486,7 +1770,7 @@ def compare_config(inherit_napalm_device=None, **kwargs):  # pylint: disable=unu
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def rollback(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -1506,7 +1790,7 @@ def rollback(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-ar
     )
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def config_changed(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -1537,7 +1821,7 @@ def config_changed(inherit_napalm_device=None, **kwargs):  # pylint: disable=unu
     return is_config_changed, reason
 
 
-@proxy_napalm_wrap
+@salt.utils.napalm.proxy_napalm_wrap
 def config_control(inherit_napalm_device=None, **kwargs):  # pylint: disable=unused-argument
 
     '''
@@ -1577,5 +1861,385 @@ def config_control(inherit_napalm_device=None, **kwargs):  # pylint: disable=unu
             )
 
     return result, comment
+
+
+def save_config(source=None,
+                path=None):
+    '''
+    .. versionadded:: Fluorine
+
+    Save the configuration to a file on the local file system.
+
+    source: ``running``
+        The configuration source. Choose from: ``running``, ``candidate``,
+        ``startup``. Default: ``running``.
+
+    path
+        Absolute path to file where to save the configuration.
+        To push the files to the Master, use
+        :mod:`cp.push <salt.modules.cp.push>` Execution function.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' net.save_config source=running
+    '''
+    if not source:
+        source = 'running'
+    if not path:
+        path = mkstemp()
+    running_config = __salt__['net.config'](source=source)
+    if not running_config or not running_config['result']:
+        log.error('Unable to retrieve the config')
+        return running_config
+    with fopen(path, 'w') as fh_:
+        fh_.write(running_config['out'][source])
+    return {
+        'result': True,
+        'out': path,
+        'comment': '{source} config saved to {path}'.format(source=source, path=path)
+    }
+
+
+def replace_pattern(pattern,
+                    repl,
+                    count=0,
+                    flags=8,
+                    bufsize=1,
+                    append_if_not_found=False,
+                    prepend_if_not_found=False,
+                    not_found_content=None,
+                    search_only=False,
+                    show_changes=True,
+                    backslash_literal=False,
+                    source=None,
+                    path=None,
+                    test=False,
+                    replace=True,
+                    debug=False,
+                    commit=True):
+    '''
+    .. versionadded:: Fluorine
+
+    Replace occurrences of a pattern in the configuration source. If
+    ``show_changes`` is ``True``, then a diff of what changed will be returned,
+    otherwise a ``True`` will be returned when changes are made, and ``False``
+    when no changes are made.
+    This is a pure Python implementation that wraps Python's :py:func:`~re.sub`.
+
+    pattern
+        A regular expression, to be matched using Python's
+        :py:func:`~re.search`.
+
+    repl
+        The replacement text.
+
+    count: ``0``
+        Maximum number of pattern occurrences to be replaced. If count is a
+        positive integer ``n``, only ``n`` occurrences will be replaced,
+        otherwise all occurrences will be replaced.
+
+    flags (list or int): ``8``
+        A list of flags defined in the ``re`` module documentation from the
+        Python standard library. Each list item should be a string that will
+        correlate to the human-friendly flag name. E.g., ``['IGNORECASE',
+        'MULTILINE']``. Optionally, ``flags`` may be an int, with a value
+        corresponding to the XOR (``|``) of all the desired flags. Defaults to
+        8 (which supports 'MULTILINE').
+
+    bufsize (int or str): ``1``
+        How much of the configuration to buffer into memory at once. The
+        default value ``1`` processes one line at a time. The special value
+        ``file`` may be specified which will read the entire file into memory
+        before processing.
+
+    append_if_not_found: ``False``
+        If set to ``True``, and pattern is not found, then the content will be
+        appended to the file.
+
+    prepend_if_not_found: ``False``
+        If set to ``True`` and pattern is not found, then the content will be
+        prepended to the file.
+
+    not_found_content
+        Content to use for append/prepend if not found. If None (default), uses
+        ``repl``. Useful when ``repl`` uses references to group in pattern.
+
+    search_only: ``False``
+        If set to true, this no changes will be performed on the file, and this
+        function will simply return ``True`` if the pattern was matched, and
+        ``False`` if not.
+
+    show_changes: ``True``
+        If ``True``, return a diff of changes made. Otherwise, return ``True``
+        if changes were made, and ``False`` if not.
+
+    backslash_literal: ``False``
+        Interpret backslashes as literal backslashes for the repl and not
+        escape characters.  This will help when using append/prepend so that
+        the backslashes are not interpreted for the repl on the second run of
+        the state.
+
+    source: ``running``
+        The configuration source. Choose from: ``running``, ``candidate``, or
+        ``startup``. Default: ``running``.
+
+    path
+        Save the temporary configuration to a specific path, then read from
+        there.
+
+    test: ``False``
+        Dry run? If set as ``True``, will apply the config, discard and return
+        the changes. Default: ``False`` and will commit the changes on the
+        device.
+
+    commit: ``True``
+        Commit the configuration changes? Default: ``True``.
+
+    debug: ``False``
+        Debug mode. Will insert a new key in the output dictionary, as
+        ``loaded_config`` containing the raw configuration loaded on the device.
+
+    replace: ``True``
+        Load and replace the configuration. Default: ``True``.
+
+    If an equal sign (``=``) appears in an argument to a Salt command it is
+    interpreted as a keyword argument in the format ``key=val``. That
+    processing can be bypassed in order to pass an equal sign through to the
+    remote shell command by manually specifying the kwarg:
+
+    .. code-block:: bash
+
+        salt '*' net.replace_pattern "bind-address\\s*=" "bind-address:"
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' net.replace_pattern PREFIX-LIST_NAME new-prefix-list-name
+        salt '*' net.replace_pattern bgp-group-name new-bgp-group-name count=1
+    '''
+    config_saved = save_config(source=source, path=path)
+    if not config_saved or not config_saved['result']:
+        return config_saved
+    path = config_saved['out']
+    replace_pattern = __salt__['file.replace'](path,
+                                               pattern,
+                                               repl,
+                                               count=count,
+                                               flags=flags,
+                                               bufsize=bufsize,
+                                               append_if_not_found=append_if_not_found,
+                                               prepend_if_not_found=prepend_if_not_found,
+                                               not_found_content=not_found_content,
+                                               search_only=search_only,
+                                               show_changes=show_changes,
+                                               backslash_literal=backslash_literal)
+    with fopen(path, 'r') as fh_:
+        updated_config = fh_.read()
+    return __salt__['net.load_config'](text=updated_config,
+                                       test=test,
+                                       debug=debug,
+                                       replace=replace,
+                                       commit=commit)
+
+
+def blockreplace(marker_start,
+                 marker_end,
+                 content='',
+                 append_if_not_found=False,
+                 prepend_if_not_found=False,
+                 show_changes=True,
+                 append_newline=False,
+                 source='running',
+                 path=None,
+                 test=False,
+                 commit=True,
+                 debug=False,
+                 replace=True):
+    '''
+    .. versionadded:: Fluorine
+
+    Replace content of the configuration source, delimited by the line markers.
+
+    A block of content delimited by comments can help you manage several lines
+    without worrying about old entries removal.
+
+    marker_start
+        The line content identifying a line as the start of the content block.
+        Note that the whole line containing this marker will be considered,
+        so whitespace or extra content before or after the marker is included
+        in final output.
+
+    marker_end
+        The line content identifying a line as the end of the content block.
+        Note that the whole line containing this marker will be considered,
+        so whitespace or extra content before or after the marker is included
+        in final output.
+
+    content
+        The content to be used between the two lines identified by
+        ``marker_start`` and ``marker_stop``.
+
+    append_if_not_found: ``False``
+        If markers are not found and set to True then, the markers and content
+        will be appended to the file.
+
+    prepend_if_not_found: ``False``
+        If markers are not found and set to True then, the markers and content
+        will be prepended to the file.
+
+    append_newline: ``False``
+        Controls whether or not a newline is appended to the content block.
+        If the value of this argument is ``True`` then a newline will be added
+        to the content block. If it is ``False``, then a newline will not be
+        added to the content block. If it is ``None`` then a newline will only
+        be added to the content block if it does not already end in a newline.
+
+    show_changes: ``True``
+        Controls how changes are presented. If ``True``, this function will
+        return the of the changes made.
+        If ``False``, then it will return a boolean (``True`` if any changes
+        were made, otherwise False).
+
+    source: ``running``
+        The configuration source. Choose from: ``running``, ``candidate``, or
+        ``startup``. Default: ``running``.
+
+    path: ``None``
+        Save the temporary configuration to a specific path, then read from
+        there. This argument is optional, can be used when you prefers a
+        particular location of the temporary file.
+
+    test: ``False``
+        Dry run? If set as ``True``, will apply the config, discard and return
+        the changes. Default: ``False`` and will commit the changes on the
+        device.
+
+    commit: ``True``
+        Commit the configuration changes? Default: ``True``.
+
+    debug: ``False``
+        Debug mode. Will insert a new key in the output dictionary, as
+        ``loaded_config`` containing the raw configuration loaded on the device.
+
+    replace: ``True``
+        Load and replace the configuration. Default: ``True``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' net.blockreplace 'ntp' 'interface' ''
+    '''
+    config_saved = save_config(source=source, path=path)
+    if not config_saved or not config_saved['result']:
+        return config_saved
+    path = config_saved['out']
+    replace_pattern = __salt__['file.blockreplace'](path,
+                                                    marker_start=marker_start,
+                                                    marker_end=marker_end,
+                                                    content=content,
+                                                    append_if_not_found=append_if_not_found,
+                                                    prepend_if_not_found=prepend_if_not_found,
+                                                    show_changes=show_changes,
+                                                    append_newline=append_newline)
+    with fopen(path, 'r') as fh_:
+        updated_config = fh_.read()
+    return __salt__['net.load_config'](text=updated_config,
+                                       test=test,
+                                       debug=debug,
+                                       replace=replace,
+                                       commit=commit)
+
+
+def patch(patchfile,
+          options='',
+          saltenv='base',
+          source_hash=None,
+          show_changes=True,
+          source='running',
+          path=None,
+          test=False,
+          commit=True,
+          debug=False,
+          replace=True):
+    '''
+    .. versionadded:: Fluorine
+
+    Apply a patch to the configuration source, and load the result into the
+    running config of the device.
+
+    patchfile
+        A patch file to apply to the configuration source.
+
+    options
+        Options to pass to patch.
+
+    source_hash
+        If the patch file (specified via the ``patchfile`` argument)  is an
+        HTTP(S) or FTP URL and the file exists in the minion's file cache, this
+        option can be passed to keep the minion from re-downloading the file if
+        the cached copy matches the specified hash.
+
+    show_changes: ``True``
+        Controls how changes are presented. If ``True``, this function will
+        return the of the changes made.
+        If ``False``, then it will return a boolean (``True`` if any changes
+        were made, otherwise False).
+
+    source: ``running``
+        The configuration source. Choose from: ``running``, ``candidate``, or
+        ``startup``. Default: ``running``.
+
+    path: ``None``
+        Save the temporary configuration to a specific path, then read from
+        there. This argument is optional, can the user prefers a particular
+        location of the temporary file.
+
+    test: ``False``
+        Dry run? If set as ``True``, will apply the config, discard and return
+        the changes. Default: ``False`` and will commit the changes on the
+        device.
+
+    commit: ``True``
+        Commit the configuration changes? Default: ``True``.
+
+    debug: ``False``
+        Debug mode. Will insert a new key in the output dictionary, as
+        ``loaded_config`` containing the raw configuration loaded on the device.
+
+    replace: ``True``
+        Load and replace the configuration. Default: ``True``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' net.patch https://example.com/running_config.patch
+    '''
+    config_saved = save_config(source=source, path=path)
+    if not config_saved or not config_saved['result']:
+        return config_saved
+    path = config_saved['out']
+    patchfile_cache = __salt__['cp.cache_file'](patchfile)
+    if patchfile_cache is False:
+        return {
+            'out': None,
+            'result': False,
+            'comment': 'The file "{}" does not exist.'.format(patchfile)
+        }
+    replace_pattern = __salt__['file.patch'](path,
+                                             patchfile_cache,
+                                             options=options)
+    with fopen(path, 'r') as fh_:
+        updated_config = fh_.read()
+    return __salt__['net.load_config'](text=updated_config,
+                                       test=test,
+                                       debug=debug,
+                                       replace=replace,
+                                       commit=commit)
+
 
 # <---- Configuration specific functions -------------------------------------------------------------------------------

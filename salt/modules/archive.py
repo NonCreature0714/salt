@@ -4,7 +4,7 @@ A module to wrap (non-Windows) archive calls
 
 .. versionadded:: 2014.1.0
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 import contextlib  # For < 2.7 compat
 import copy
 import errno
@@ -23,7 +23,7 @@ except ImportError:
     from pipes import quote as _quote
 
 # Import third party libs
-import salt.ext.six as six
+from salt.ext import six
 from salt.ext.six.moves.urllib.parse import urlparse as _urlparse  # pylint: disable=no-name-in-module
 try:
     import rarfile
@@ -33,10 +33,16 @@ except ImportError:
 
 # Import salt libs
 from salt.exceptions import SaltInvocationError, CommandExecutionError
-import salt.utils
+import salt.utils.decorators
+import salt.utils.decorators.path
 import salt.utils.files
-import salt.utils.itertools
+import salt.utils.path
+import salt.utils.platform
+import salt.utils.stringutils
 import salt.utils.templates
+
+if salt.utils.platform.is_windows():
+    import win32file
 
 # TODO: Check that the passed arguments are correct
 
@@ -55,7 +61,8 @@ def list_(name,
           strip_components=None,
           clean=False,
           verbose=False,
-          saltenv='base'):
+          saltenv='base',
+          source_hash=None):
     '''
     .. versionadded:: 2016.11.0
     .. versionchanged:: 2016.11.2
@@ -144,6 +151,14 @@ def list_(name,
         ``archive``. This is only applicable when ``archive`` is a file from
         the ``salt://`` fileserver.
 
+    source_hash
+        If ``name`` is an http(s)/ftp URL and the file exists in the minion's
+        file cache, this option can be passed to keep the minion from
+        re-downloading the archive if the cached copy matches the specified
+        hash.
+
+        .. versionadded:: 2018.3.0
+
     .. _tarfile: https://docs.python.org/2/library/tarfile.html
     .. _xz: http://tukaani.org/xz/
 
@@ -155,6 +170,7 @@ def list_(name,
             salt '*' archive.list /path/to/myfile.tar.gz strip_components=1
             salt '*' archive.list salt://foo.tar.gz
             salt '*' archive.list https://domain.tld/myfile.zip
+            salt '*' archive.list https://domain.tld/myfile.zip source_hash=f1d2d2f924e986ac86fdf7b36c94bcdf32beec15
             salt '*' archive.list ftp://10.1.2.3/foo.rar
     '''
     def _list_tar(name, cached, decompress_cmd, failhard=False):
@@ -170,12 +186,13 @@ def list_(name,
                 else {'fileobj': cached.stdout, 'mode': 'r|'}
             with contextlib.closing(tarfile.open(**open_kwargs)) as tar_archive:
                 for member in tar_archive.getmembers():
+                    _member = salt.utils.data.decode(member.name)
                     if member.issym():
-                        links.append(member.name)
+                        links.append(_member)
                     elif member.isdir():
-                        dirs.append(member.name + '/')
+                        dirs.append(_member + '/')
                     else:
-                        files.append(member.name)
+                        files.append(_member)
             return dirs, files, links
 
         except tarfile.ReadError:
@@ -188,7 +205,7 @@ def list_(name,
                             info={'error': stderr}
                         )
             else:
-                if not salt.utils.which('tar'):
+                if not salt.utils.path.which('tar'):
                     raise CommandExecutionError('\'tar\' command not available')
                 if decompress_cmd is not None:
                     # Guard against shell injection
@@ -199,7 +216,7 @@ def list_(name,
                     except AttributeError:
                         raise CommandExecutionError('Invalid CLI options')
                 else:
-                    if salt.utils.which('xz') \
+                    if salt.utils.path.which('xz') \
                             and __salt__['cmd.retcode'](['xz', '-t', cached],
                                                         python_shell=False,
                                                         ignore_retcode=True) == 0:
@@ -234,7 +251,7 @@ def list_(name,
             with contextlib.closing(zipfile.ZipFile(cached)) as zip_archive:
                 for member in zip_archive.infolist():
                     path = member.filename
-                    if salt.utils.is_windows():
+                    if salt.utils.platform.is_windows():
                         if path.endswith('/'):
                             # zipfile.ZipInfo objects on windows use forward
                             # slash at end of the directory name.
@@ -279,7 +296,7 @@ def list_(name,
                     else:
                         files.append(path)
         else:
-            if not salt.utils.which('rar'):
+            if not salt.utils.path.which('rar'):
                 raise CommandExecutionError(
                     'rar command not available, is it installed?'
                 )
@@ -304,7 +321,7 @@ def list_(name,
                 )
         return dirs, files, []
 
-    cached = __salt__['cp.cache_file'](name, saltenv)
+    cached = __salt__['cp.cache_file'](name, saltenv, source_hash=source_hash)
     if not cached:
         raise CommandExecutionError('Failed to cache {0}'.format(name))
 
@@ -394,9 +411,9 @@ def list_(name,
                 item.sort()
 
         if verbose:
-            ret = {'dirs': sorted(dirs),
-                   'files': sorted(files),
-                   'links': sorted(links)}
+            ret = {'dirs': sorted(salt.utils.data.decode_list(dirs)),
+                   'files': sorted(salt.utils.data.decode_list(files)),
+                   'links': sorted(salt.utils.data.decode_list(links))}
             ret['top_level_dirs'] = [x for x in ret['dirs']
                                      if x.count('/') == 1]
             ret['top_level_files'] = [x for x in ret['files']
@@ -439,13 +456,13 @@ def _expand_sources(sources):
     if isinstance(sources, six.string_types):
         sources = [x.strip() for x in sources.split(',')]
     elif isinstance(sources, (float, six.integer_types)):
-        sources = [str(sources)]
+        sources = [six.text_type(sources)]
     return [path
             for source in sources
             for path in _glob(source)]
 
 
-@salt.utils.decorators.which('tar')
+@salt.utils.decorators.path.which('tar')
 def tar(options, tarfile, sources=None, dest=None,
         cwd=None, template=None, runas=None):
     '''
@@ -498,16 +515,16 @@ def tar(options, tarfile, sources=None, dest=None,
 
         .. code-block:: bash
 
-            salt '*' archive.tar -cjvf /tmp/salt.tar.bz2 {{grains.saltpath}} template=jinja
+            salt '*' archive.tar cjvf /tmp/salt.tar.bz2 {{grains.saltpath}} template=jinja
 
     CLI Examples:
 
     .. code-block:: bash
 
         # Create a tarfile
-        salt '*' archive.tar -cjvf /tmp/tarfile.tar.bz2 /tmp/file_1,/tmp/file_2
+        salt '*' archive.tar cjvf /tmp/tarfile.tar.bz2 /tmp/file_1,/tmp/file_2
         # Create a tarfile using globbing (2017.7.0 and later)
-        salt '*' archive.tar -cjvf /tmp/tarfile.tar.bz2 '/tmp/file_*'
+        salt '*' archive.tar cjvf /tmp/tarfile.tar.bz2 '/tmp/file_*'
         # Unpack a tarfile
         salt '*' archive.tar xf foo.tar dest=/target/directory
     '''
@@ -518,14 +535,14 @@ def tar(options, tarfile, sources=None, dest=None,
         raise SaltInvocationError('Tar options can not be empty')
 
     cmd = ['tar']
-    if dest:
-        cmd.extend(['-C', '{0}'.format(dest)])
-
     if options:
         cmd.extend(options.split())
 
     cmd.extend(['{0}'.format(tarfile)])
     cmd.extend(_expand_sources(sources))
+    if dest:
+        cmd.extend(['-C', '{0}'.format(dest)])
+
     return __salt__['cmd.run'](cmd,
                                cwd=cwd,
                                template=template,
@@ -533,7 +550,7 @@ def tar(options, tarfile, sources=None, dest=None,
                                python_shell=False).splitlines()
 
 
-@salt.utils.decorators.which('gzip')
+@salt.utils.decorators.path.which('gzip')
 def gzip(sourcefile, template=None, runas=None, options=None):
     '''
     Uses the gzip command to create gzip files
@@ -573,7 +590,7 @@ def gzip(sourcefile, template=None, runas=None, options=None):
                                python_shell=False).splitlines()
 
 
-@salt.utils.decorators.which('gunzip')
+@salt.utils.decorators.path.which('gunzip')
 def gunzip(gzipfile, template=None, runas=None, options=None):
     '''
     Uses the gunzip command to unpack gzip files
@@ -613,7 +630,7 @@ def gunzip(gzipfile, template=None, runas=None, options=None):
                                python_shell=False).splitlines()
 
 
-@salt.utils.decorators.which('zip')
+@salt.utils.decorators.path.which('zip')
 def cmd_zip(zip_file, sources, template=None, cwd=None, runas=None):
     '''
     .. versionadded:: 2015.5.0
@@ -683,7 +700,7 @@ def cmd_zip(zip_file, sources, template=None, cwd=None, runas=None):
 
 
 @salt.utils.decorators.depends('zipfile', fallback_function=cmd_zip)
-def zip_(zip_file, sources, template=None, cwd=None, runas=None):
+def zip_(zip_file, sources, template=None, cwd=None, runas=None, zip64=False):
     '''
     Uses the ``zipfile`` Python module to create zip files
 
@@ -728,6 +745,14 @@ def zip_(zip_file, sources, template=None, cwd=None, runas=None):
         Create the zip file as the specified user. Defaults to the user under
         which the minion is running.
 
+    zip64 : False
+        Used to enable ZIP64 support, necessary to create archives larger than
+        4 GByte in size.
+        If true, will create ZIP file with the ZIPp64 extension when the zipfile
+        is larger than 2 GB.
+        ZIP64 extension is disabled by default in the Python native zip support
+        because the default zip and unzip commands on Unix (the InfoZIP utilities)
+        don't support these extensions.
 
     CLI Example:
 
@@ -772,7 +797,7 @@ def zip_(zip_file, sources, template=None, cwd=None, runas=None):
     try:
         exc = None
         archived_files = []
-        with contextlib.closing(zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED)) as zfile:
+        with contextlib.closing(zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED, zip64)) as zfile:
             for src in sources:
                 if cwd:
                     src = os.path.join(cwd, src)
@@ -782,12 +807,11 @@ def zip_(zip_file, sources, template=None, cwd=None, runas=None):
                     else:
                         rel_root = cwd if cwd is not None else '/'
                     if os.path.isdir(src):
-                        for dir_name, sub_dirs, files in os.walk(src):
+                        for dir_name, sub_dirs, files in salt.utils.path.os_walk(src):
                             if cwd and dir_name.startswith(cwd):
-                                arc_dir = salt.utils.relpath(dir_name, cwd)
+                                arc_dir = os.path.relpath(dir_name, cwd)
                             else:
-                                arc_dir = salt.utils.relpath(dir_name,
-                                                             rel_root)
+                                arc_dir = os.path.relpath(dir_name, rel_root)
                             if arc_dir:
                                 archived_files.append(arc_dir + '/')
                                 zfile.write(dir_name, arc_dir)
@@ -798,9 +822,9 @@ def zip_(zip_file, sources, template=None, cwd=None, runas=None):
                                 zfile.write(abs_name, arc_name)
                     else:
                         if cwd and src.startswith(cwd):
-                            arc_name = salt.utils.relpath(src, cwd)
+                            arc_name = os.path.relpath(src, cwd)
                         else:
-                            arc_name = salt.utils.relpath(src, rel_root)
+                            arc_name = os.path.relpath(src, rel_root)
                         archived_files.append(arc_name)
                         zfile.write(src, arc_name)
     except Exception as exc:
@@ -813,14 +837,20 @@ def zip_(zip_file, sources, template=None, cwd=None, runas=None):
         if exc is not None:
             # Wait to raise the exception until euid/egid are restored to avoid
             # permission errors in writing to minion log.
-            raise CommandExecutionError(
-                'Exception encountered creating zipfile: {0}'.format(exc)
-            )
+            if exc == zipfile.LargeZipFile:
+                raise CommandExecutionError(
+                    'Resulting zip file too large, would require ZIP64 support'
+                    'which has not been enabled. Rerun command with zip64=True'
+                )
+            else:
+                raise CommandExecutionError(
+                    'Exception encountered creating zipfile: {0}'.format(exc)
+                )
 
     return archived_files
 
 
-@salt.utils.decorators.which('unzip')
+@salt.utils.decorators.path.which('unzip')
 def cmd_unzip(zip_file,
               dest,
               excludes=None,
@@ -900,7 +930,7 @@ def cmd_unzip(zip_file,
     if isinstance(excludes, six.string_types):
         excludes = [x.strip() for x in excludes.split(',')]
     elif isinstance(excludes, (float, six.integer_types)):
-        excludes = [str(excludes)]
+        excludes = [six.text_type(excludes)]
 
     cmd = ['unzip']
     if password:
@@ -1045,12 +1075,12 @@ def unzip(zip_file,
             if isinstance(excludes, six.string_types):
                 excludes = [x.strip() for x in excludes.split(',')]
             elif isinstance(excludes, (float, six.integer_types)):
-                excludes = [str(excludes)]
+                excludes = [six.text_type(excludes)]
 
             cleaned_files.extend([x for x in files if x not in excludes])
             for target in cleaned_files:
                 if target not in excludes:
-                    if salt.utils.is_windows() is False:
+                    if salt.utils.platform.is_windows() is False:
                         info = zfile.getinfo(target)
                         # Check if zipped file is a symbolic link
                         if stat.S_ISLNK(info.external_attr >> 16):
@@ -1059,15 +1089,18 @@ def unzip(zip_file,
                             continue
                     zfile.extract(target, dest, password)
                     if extract_perms:
-                        perm = zfile.getinfo(target).external_attr >> 16
-                        if perm == 0:
-                            umask_ = os.umask(0)
-                            os.umask(umask_)
-                            if target.endswith('/'):
-                                perm = 0o777 & ~umask_
-                            else:
-                                perm = 0o666 & ~umask_
-                        os.chmod(os.path.join(dest, target), perm)
+                        if not salt.utils.platform.is_windows():
+                            perm = zfile.getinfo(target).external_attr >> 16
+                            if perm == 0:
+                                umask_ = salt.utils.files.get_umask()
+                                if target.endswith('/'):
+                                    perm = 0o777 & ~umask_
+                                else:
+                                    perm = 0o666 & ~umask_
+                            os.chmod(os.path.join(dest, target), perm)
+                        else:
+                            win32_attr = zfile.getinfo(target).external_attr & 0xFF
+                            win32file.SetFileAttributes(os.path.join(dest, target), win32_attr)
     except Exception as exc:
         if runas:
             os.seteuid(euid)
@@ -1086,7 +1119,7 @@ def unzip(zip_file,
     return _trim_files(cleaned_files, trim_output)
 
 
-def is_encrypted(name, clean=False, saltenv='base'):
+def is_encrypted(name, clean=False, saltenv='base', source_hash=None):
     '''
     .. versionadded:: 2016.11.0
 
@@ -1105,6 +1138,18 @@ def is_encrypted(name, clean=False, saltenv='base'):
             If there is an error listing the archive's contents, the cached
             file will not be removed, to allow for troubleshooting.
 
+    saltenv : base
+        Specifies the fileserver environment from which to retrieve
+        ``archive``. This is only applicable when ``archive`` is a file from
+        the ``salt://`` fileserver.
+
+    source_hash
+        If ``name`` is an http(s)/ftp URL and the file exists in the minion's
+        file cache, this option can be passed to keep the minion from
+        re-downloading the archive if the cached copy matches the specified
+        hash.
+
+        .. versionadded:: 2018.3.0
 
     CLI Examples:
 
@@ -1114,9 +1159,10 @@ def is_encrypted(name, clean=False, saltenv='base'):
             salt '*' archive.is_encrypted salt://foo.zip
             salt '*' archive.is_encrypted salt://foo.zip saltenv=dev
             salt '*' archive.is_encrypted https://domain.tld/myfile.zip clean=True
+            salt '*' archive.is_encrypted https://domain.tld/myfile.zip source_hash=f1d2d2f924e986ac86fdf7b36c94bcdf32beec15
             salt '*' archive.is_encrypted ftp://10.1.2.3/foo.zip
     '''
-    cached = __salt__['cp.cache_file'](name, saltenv)
+    cached = __salt__['cp.cache_file'](name, saltenv, source_hash=source_hash)
     if not cached:
         raise CommandExecutionError('Failed to cache {0}'.format(name))
 
@@ -1149,7 +1195,7 @@ def is_encrypted(name, clean=False, saltenv='base'):
     return ret
 
 
-@salt.utils.decorators.which('rar')
+@salt.utils.decorators.path.which('rar')
 def rar(rarfile, sources, template=None, cwd=None, runas=None):
     '''
     Uses `rar for Linux`_ to create rar files
@@ -1200,7 +1246,7 @@ def rar(rarfile, sources, template=None, cwd=None, runas=None):
                                python_shell=False).splitlines()
 
 
-@salt.utils.decorators.which_bin(('unrar', 'rar'))
+@salt.utils.decorators.path.which_bin(('unrar', 'rar'))
 def unrar(rarfile, dest, excludes=None, template=None, runas=None, trim_output=False):
     '''
     Uses `rar for Linux`_ to unpack rar files
@@ -1235,7 +1281,7 @@ def unrar(rarfile, dest, excludes=None, template=None, runas=None, trim_output=F
     if isinstance(excludes, six.string_types):
         excludes = [entry.strip() for entry in excludes.split(',')]
 
-    cmd = [salt.utils.which_bin(('unrar', 'rar')),
+    cmd = [salt.utils.path.which_bin(('unrar', 'rar')),
            'x', '-idp', '{0}'.format(rarfile)]
     if excludes is not None:
         for exclude in excludes:
@@ -1279,14 +1325,14 @@ def _render_filenames(filenames, zip_file, saltenv, template):
         '''
         # write out path to temp file
         tmp_path_fn = salt.utils.files.mkstemp()
-        with salt.utils.fopen(tmp_path_fn, 'w+') as fp_:
-            fp_.write(contents)
+        with salt.utils.files.fopen(tmp_path_fn, 'w+') as fp_:
+            fp_.write(salt.utils.stringutils.to_str(contents))
         data = salt.utils.templates.TEMPLATE_REGISTRY[template](
             tmp_path_fn,
             to_str=True,
             **kwargs
         )
-        salt.utils.safe_rm(tmp_path_fn)
+        salt.utils.files.safe_rm(tmp_path_fn)
         if not data['result']:
             # Failed to render the template
             raise CommandExecutionError(

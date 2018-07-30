@@ -2,10 +2,12 @@
 '''
 If Salt's OS detection does not identify a different virtual service module, the minion will fall back to using this basic module, which simply wraps sysvinit scripts.
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
 # Import python libs
 import os
+import fnmatch
+import re
 
 __func_alias__ = {
     'reload_': 'reload'
@@ -35,6 +37,7 @@ def __virtual__():
         'Devuan',
         'Arch',
         'Arch ARM',
+        'Manjaro',
         'ALT',
         'SUSE  Enterprise Server',
         'SUSE',
@@ -104,7 +107,7 @@ def start(name):
 
         salt '*' service.start <service name>
     '''
-    return __salt__['service.run'](name, 'start')
+    return run(name, 'start')
 
 
 def stop(name):
@@ -117,7 +120,7 @@ def stop(name):
 
         salt '*' service.stop <service name>
     '''
-    return __salt__['service.run'](name, 'stop')
+    return run(name, 'stop')
 
 
 def restart(name):
@@ -130,14 +133,25 @@ def restart(name):
 
         salt '*' service.restart <service name>
     '''
-    return __salt__['service.run'](name, 'restart')
+    return run(name, 'restart')
 
 
 def status(name, sig=None):
     '''
-    Return the status for a service, returns the PID or an empty string if the
-    service is running or not, pass a signature to use to find the service via
-    ps
+    Return the status for a service.
+    If the name contains globbing, a dict mapping service name to PID or empty
+    string is returned.
+
+    .. versionchanged:: 2018.3.0
+        The service name can now be a glob (e.g. ``salt*``)
+
+    Args:
+        name (str): The name of the service to check
+        sig (str): Signature to use to find the service via ps
+
+    Returns:
+        string: PID if running, empty otherwise
+        dict: Maps service name to PID if running, empty string otherwise
 
     CLI Example:
 
@@ -145,7 +159,20 @@ def status(name, sig=None):
 
         salt '*' service.status <service name> [service signature]
     '''
-    return __salt__['status.pid'](sig if sig else name)
+    if sig:
+        return __salt__['status.pid'](sig)
+
+    contains_globbing = bool(re.search(r'\*|\?|\[.+\]', name))
+    if contains_globbing:
+        services = fnmatch.filter(get_all(), name)
+    else:
+        services = [name]
+    results = {}
+    for service in services:
+        results[service] = __salt__['status.pid'](service)
+    if contains_globbing:
+        return results
+    return results[name]
 
 
 def reload_(name):
@@ -159,7 +186,7 @@ def reload_(name):
 
         salt '*' service.reload <service name>
     '''
-    return __salt__['service.run'](name, 'reload')
+    return run(name, 'reload')
 
 
 def available(name):

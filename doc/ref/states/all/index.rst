@@ -31,6 +31,7 @@ state modules
     boto_apigateway
     boto_asg
     boto_cfn
+    boto_cloudfront
     boto_cloudtrail
     boto_cloudwatch_alarm
     boto_cloudwatch_event
@@ -62,6 +63,7 @@ state modules
     chef
     chocolatey
     chronos_job
+    cimc
     cisconso
     cloud
     cmd
@@ -73,7 +75,10 @@ state modules
     debconfmod
     dellchassis
     disk
-    docker
+    docker_container
+    docker_image
+    docker_network
+    docker_volume
     drac
     elasticsearch
     elasticsearch_index
@@ -91,6 +96,7 @@ state modules
     git
     github
     glance
+    glance_image
     glusterfs
     gnomedesktop
     gpg
@@ -118,7 +124,10 @@ state modules
     influxdb_database
     influxdb_retention_policy
     influxdb_user
-    infoblox
+    infoblox_a
+    infoblox_cname
+    infoblox_host_record
+    infoblox_range
     ini_manage
     ipmi
     ipset
@@ -126,12 +135,20 @@ state modules
     jboss7
     jenkins
     junos
-    k8s
     kapacitor
     kernelpkg
     keyboard
     keystone
+    keystone_domain
+    keystone_endpoint
+    keystone_group
+    keystone_project
+    keystone_role
+    keystone_role_grant
+    keystone_service
+    keystone_user
     kmod
+    kubernetes
     layman
     ldap
     libcloud_dns
@@ -174,6 +191,11 @@ state modules
     netusers
     network
     netyang
+    neutron_network
+    neutron_secgroup
+    neutron_secgroup_rule
+    neutron_subnet
+    nfs_export
     nftables
     npm
     ntp
@@ -181,11 +203,13 @@ state modules
     openstack_config
     openvswitch_bridge
     openvswitch_port
+    opsgenie
     pagerduty
     pagerduty_escalation_policy
     pagerduty_schedule
     pagerduty_service
     pagerduty_user
+    panos
     pcs
     pecl
     pdbedit
@@ -245,7 +269,6 @@ state modules
     stateconf
     status
     statuspage
-    stormpath_account
     supervisord
     svn
     sysctl
@@ -261,6 +284,7 @@ state modules
     tuned
     uptime
     user
+    vagrant
     vault
     vbox_guest
     victorops
@@ -282,19 +306,22 @@ state modules
     win_smtp_server
     win_snmp
     win_system
-    win_update
     win_wua
     winrepo
     x509
     xmpp
+    zabbix_action
     zabbix_host
     zabbix_hostgroup
     zabbix_mediatype
+    zabbix_template
     zabbix_user
     zabbix_usergroup
+    zabbix_valuemap
     zcbuildout
     zenoss
     zk_concurrency
     zfs
     zone
+    zookeeper
     zpool

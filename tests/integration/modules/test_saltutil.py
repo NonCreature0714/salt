@@ -4,11 +4,17 @@ Integration tests for the saltutil module.
 '''
 
 # Import Python libs
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
+import os
 import time
+import textwrap
 
 # Import Salt Testing libs
 from tests.support.case import ModuleCase
+from tests.support.paths import TMP_PILLAR_TREE
+
+# Import Salt Libs
+import salt.utils.files
 
 
 class SaltUtilModuleTest(ModuleCase):
@@ -78,7 +84,8 @@ class SaltUtilSyncModuleTest(ModuleCase):
                            'beacons': [],
                            'utils': [],
                            'returners': [],
-                           'modules': ['modules.override_test',
+                           'modules': ['modules.mantest',
+                                       'modules.override_test',
                                        'modules.runtests_decorators',
                                        'modules.runtests_helpers',
                                        'modules.salttest'],
@@ -87,7 +94,9 @@ class SaltUtilSyncModuleTest(ModuleCase):
                            'states': [],
                            'sdb': [],
                            'proxymodules': [],
-                           'output': []}
+                           'output': [],
+                           'thorium': [],
+                           'serializers': []}
         ret = self.run_function('saltutil.sync_all')
         self.assertEqual(ret, expected_return)
 
@@ -107,7 +116,9 @@ class SaltUtilSyncModuleTest(ModuleCase):
                            'states': [],
                            'sdb': [],
                            'proxymodules': [],
-                           'output': []}
+                           'output': [],
+                           'thorium': [],
+                           'serializers': []}
         ret = self.run_function('saltutil.sync_all', extmod_whitelist={'modules': ['salttest']})
         self.assertEqual(ret, expected_return)
 
@@ -121,7 +132,8 @@ class SaltUtilSyncModuleTest(ModuleCase):
                            'beacons': [],
                            'utils': [],
                            'returners': [],
-                           'modules': ['modules.override_test',
+                           'modules': ['modules.mantest',
+                                       'modules.override_test',
                                        'modules.runtests_helpers',
                                        'modules.salttest'],
                            'renderers': [],
@@ -129,7 +141,9 @@ class SaltUtilSyncModuleTest(ModuleCase):
                            'states': [],
                            'sdb': [],
                            'proxymodules': [],
-                           'output': []}
+                           'output': [],
+                           'thorium': [],
+                           'serializers': []}
         ret = self.run_function('saltutil.sync_all', extmod_blacklist={'modules': ['runtests_decorators']})
         self.assertEqual(ret, expected_return)
 
@@ -149,7 +163,57 @@ class SaltUtilSyncModuleTest(ModuleCase):
                            'states': [],
                            'sdb': [],
                            'proxymodules': [],
-                           'output': []}
+                           'output': [],
+                           'thorium': [],
+                           'serializers': []}
         ret = self.run_function('saltutil.sync_all', extmod_whitelist={'modules': ['runtests_decorators']},
                                 extmod_blacklist={'modules': ['runtests_decorators']})
         self.assertEqual(ret, expected_return)
+
+
+class SaltUtilSyncPillarTest(ModuleCase):
+    '''
+    Testcase for the saltutil sync pillar module
+    '''
+
+    def test_pillar_refresh(self):
+        '''
+        test pillar refresh module
+        '''
+        pillar_key = 'itworked'
+
+        pre_pillar = self.run_function('pillar.raw')
+        self.assertNotIn(pillar_key, pre_pillar.get(pillar_key, 'didnotwork'))
+
+        with salt.utils.files.fopen(os.path.join(TMP_PILLAR_TREE, 'add_pillar.sls'), 'w') as fp:
+            fp.write(salt.utils.stringutils.to_str(
+                '{0}: itworked'.format(pillar_key)
+            ))
+
+        with salt.utils.files.fopen(os.path.join(TMP_PILLAR_TREE, 'top.sls'), 'w') as fp:
+            fp.write(textwrap.dedent('''\
+                     base:
+                       '*':
+                         - add_pillar
+                     '''))
+
+        self.run_function('saltutil.refresh_pillar')
+
+        pillar = False
+        timeout = time.time() + 30
+        while not pillar:
+            post_pillar = self.run_function('pillar.raw')
+            try:
+                self.assertIn(pillar_key, post_pillar.get(pillar_key, 'didnotwork'))
+                pillar = True
+            except AssertionError:
+                if time.time() > timeout:
+                    self.assertIn(pillar_key, post_pillar.get(pillar_key, 'didnotwork'))
+                continue
+
+        post_pillar = self.run_function('pillar.raw')
+        self.assertIn(pillar_key, post_pillar.get(pillar_key, 'didnotwork'))
+
+    def tearDown(self):
+        for filename in os.listdir(TMP_PILLAR_TREE):
+            os.remove(os.path.join(TMP_PILLAR_TREE, filename))

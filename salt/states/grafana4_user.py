@@ -4,26 +4,28 @@ Manage Grafana v4.0 users
 
 .. versionadded:: 2017.7.0
 
-Token auth setup
+:configuration: This state requires a configuration profile to be configured
+    in the minion config, minion pillar, or master config. The module will use
+    the 'grafana' key by default, if defined.
 
-.. code-block:: yaml
+    Example configuration using basic authentication:
 
-    grafana_version: 4
-    grafana:
-      grafana_timeout: 5
-      grafana_token: qwertyuiop
-      grafana_url: 'https://url.com'
+    .. code-block:: yaml
 
-Basic auth setup
+        grafana:
+          grafana_url: http://grafana.localhost
+          grafana_user: admin
+          grafana_password: admin
+          grafana_timeout: 3
 
-.. code-block:: yaml
+    Example configuration using token based authentication:
 
-    grafana_version: 4
-    grafana:
-      grafana_timeout: 5
-      grafana_user: grafana
-      grafana_password: qwertyuiop
-      grafana_url: 'https://url.com'
+    .. code-block:: yaml
+
+        grafana:
+          grafana_url: http://grafana.localhost
+          grafana_token: token
+          grafana_timeout: 3
 
 .. code-block:: yaml
 
@@ -35,11 +37,13 @@ Basic auth setup
         - fullname: Foo Bar
         - is_admin: true
 '''
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, unicode_literals
 
-from salt.ext.six import string_types
-from salt.utils import dictupdate
+import salt.utils.dictupdate as dictupdate
 from salt.utils.dictdiffer import deep_diff
+
+# Import 3rd-party libs
+from salt.ext.six import string_types
 
 
 def __virtual__():
@@ -87,6 +91,9 @@ def present(name,
     create = not user
 
     if create:
+        if __opts__['test']:
+            ret['comment'] = 'User {0} will be created'.format(name)
+            return ret
         __salt__['grafana4.create_user'](
             login=name,
             password=password,
@@ -96,17 +103,24 @@ def present(name,
         user = __salt__['grafana4.get_user'](name, profile)
         ret['changes']['new'] = user
 
-    user_data = __salt__['grafana4.get_user_data'](user['id'])
+    user_data = __salt__['grafana4.get_user_data'](user['id'], profile=profile)
     data = _get_json_data(login=name, email=email, name=fullname, theme=theme,
                           defaults=user_data)
     if data != _get_json_data(login=None, email=None, name=None, theme=None,
                               defaults=user_data):
+        if __opts__['test']:
+            ret['comment'] = 'User {0} will be updated'.format(name)
+            return ret
         __salt__['grafana4.update_user'](user['id'], profile=profile, **data)
         dictupdate.update(
             ret['changes'], deep_diff(
                 user_data, __salt__['grafana4.get_user_data'](user['id'])))
 
     if user['isAdmin'] != is_admin:
+        if __opts__['test']:
+            ret['comment'] = 'User {0} isAdmin status will be updated'.format(
+                    name)
+            return ret
         __salt__['grafana4.update_user_permissions'](
             user['id'], isGrafanaAdmin=is_admin, profile=profile)
         dictupdate.update(ret['changes'], deep_diff(
@@ -120,7 +134,7 @@ def present(name,
         if ret['changes']:
             ret['comment'] = 'User {0} updated'.format(name)
         else:
-            ret['changes'] = None
+            ret['changes'] = {}
             ret['comment'] = 'User {0} already up-to-date'.format(name)
 
     return ret
@@ -144,6 +158,9 @@ def absent(name, profile='grafana'):
     user = __salt__['grafana4.get_user'](name, profile)
 
     if user:
+        if __opts__['test']:
+            ret['comment'] = 'User {0} will be deleted'.format(name)
+            return ret
         orgs = __salt__['grafana4.get_user_orgs'](user['id'], profile=profile)
         __salt__['grafana4.delete_user'](user['id'], profile=profile)
         for org in orgs:
